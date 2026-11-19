@@ -43,6 +43,10 @@ BOOL RtWs2_32(
     VOID
 );
 
+BOOL RtDnsapi(
+    VOID
+);
+
 BOOL RtSspicli(
     VOID
 );

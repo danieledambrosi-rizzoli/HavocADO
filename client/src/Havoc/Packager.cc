@@ -289,6 +289,17 @@ bool Packager::DispatchListener( Util::Packager::PPackage Package )
                     .Endpoint = Package->Body.Info[ "Endpoint" ].c_str(),
                 };
             }
+            else if ( ListenerInfo.Protocol == Listener::PayloadDNS.toStdString() )
+            {
+                ListenerInfo.Info = Listener::DNS {
+                    .Domain     = Package->Body.Info[ "Domain" ].c_str(),
+                    .BindHost   = Package->Body.Info[ "BindHost" ].c_str(),
+                    .BindPort   = Package->Body.Info[ "BindPort" ].c_str(),
+                    .RecordType = Package->Body.Info[ "RecordType" ].c_str(),
+                    .Encoding   = Package->Body.Info[ "Encoding" ].c_str(),
+                    .Frequency  = Package->Body.Info[ "Frequency" ].c_str(),
+                };
+            }
             else
             {
                 // We assume it's a service listener.
@@ -424,6 +435,17 @@ bool Packager::DispatchListener( Util::Packager::PPackage Package )
             {
                 ListenerInfo.Info = Listener::External {
                         .Endpoint = Package->Body.Info[ "Endpoint" ].c_str(),
+                };
+            }
+            else if ( ListenerInfo.Protocol == Listener::PayloadDNS.toStdString() )
+            {
+                ListenerInfo.Info = Listener::DNS {
+                        .Domain     = Package->Body.Info[ "Domain" ].c_str(),
+                        .BindHost   = Package->Body.Info[ "BindHost" ].c_str(),
+                        .BindPort   = Package->Body.Info[ "BindPort" ].c_str(),
+                        .RecordType = Package->Body.Info[ "RecordType" ].c_str(),
+                        .Encoding   = Package->Body.Info[ "Encoding" ].c_str(),
+                        .Frequency  = Package->Body.Info[ "Frequency" ].c_str(),
                 };
             }
 

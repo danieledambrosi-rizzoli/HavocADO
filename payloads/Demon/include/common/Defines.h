@@ -273,6 +273,8 @@
 #define H_FUNC_CONNECT                               0xe73478ef
 #define H_FUNC_GETADDRINFO                           0x4b91706c
 #define H_FUNC_FREEADDRINFO                          0x307204e
+#define H_FUNC_DNSQUERY_A                            0x8641aec0
+#define H_FUNC_DNSFREE                               0x322fdc0c
 #define H_FUNC_LSAREGISTERLOGONPROCESS               0xd8f30a28
 #define H_FUNC_LSALOOKUPAUTHENTICATIONPACKAGE        0x876cc00b
 #define H_FUNC_LSADEREGISTERLOGONPROCESS             0x8aba5ef1

@@ -225,6 +225,14 @@ void HavocNamespace::UserInterface::Widgets::ListenersTable::ListenerAdd( Util::
     {
         item_Host->setText( any_cast<Listener::External>( item.Info ).Endpoint );
     }
+    else if ( item.Protocol == Listener::PayloadDNS.toStdString() )
+    {
+        auto Info = any_cast<Listener::DNS>( item.Info );
+
+        item_Host->setText( Info.Domain );
+        item_PortBind->setText( Info.BindPort );
+        item_PortConn->setText( Info.BindHost );
+    }
     else
     {
         auto Host     = QString();

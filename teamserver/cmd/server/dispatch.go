@@ -581,6 +581,40 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 				break
 
+			case handlers.AGENT_DNS:
+
+				var Config handlers.DNSConfig
+
+				Config.Name, _ = pk.Body.Info["Name"].(string)
+				Config.Domain, _ = pk.Body.Info["Domain"].(string)
+				Config.BindHost, _ = pk.Body.Info["BindHost"].(string)
+				Config.RecordType, _ = pk.Body.Info["RecordType"].(string)
+				Config.Encoding, _ = pk.Body.Info["Encoding"].(string)
+
+				if val, ok := pk.Body.Info["BindPort"].(string); ok {
+					Config.BindPort, _ = strconv.Atoi(val)
+				}
+				if val, ok := pk.Body.Info["Frequency"].(string); ok {
+					Config.Frequency, _ = strconv.Atoi(val)
+				}
+
+				if err := t.ListenerStart(handlers.LISTENER_DNS, Config); err != nil {
+					t.Clients.Range(func(key, value any) bool {
+						id := key.(string)
+						client := value.(*Client)
+						if client.Username == pk.Head.User {
+							err := t.SendEvent(id, events.Listener.ListenerError(pk.Head.User, Config.Name, err))
+							if err != nil {
+								logger.Error("Failed to send Event: " + err.Error())
+							}
+							return false
+						}
+						return true
+					})
+				}
+
+				break
+
 			default:
 
 				// check if the service endpoint is up and available
@@ -793,6 +827,32 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 				t.ListenerEdit(handlers.LISTENER_HTTP, Config)
 
 				var p = events.Listener.ListenerEdit(handlers.LISTENER_HTTP, &Config)
+
+				t.EventAppend(p)
+				t.EventBroadcast("", p)
+
+				break
+
+			case handlers.AGENT_DNS:
+
+				var Config handlers.DNSConfig
+
+				Config.Name, _ = pk.Body.Info["Name"].(string)
+				Config.Domain, _ = pk.Body.Info["Domain"].(string)
+				Config.BindHost, _ = pk.Body.Info["BindHost"].(string)
+				Config.RecordType, _ = pk.Body.Info["RecordType"].(string)
+				Config.Encoding, _ = pk.Body.Info["Encoding"].(string)
+
+				if val, ok := pk.Body.Info["BindPort"].(string); ok {
+					Config.BindPort, _ = strconv.Atoi(val)
+				}
+				if val, ok := pk.Body.Info["Frequency"].(string); ok {
+					Config.Frequency, _ = strconv.Atoi(val)
+				}
+
+				t.ListenerEdit(handlers.LISTENER_DNS, Config)
+
+				var p = events.Listener.ListenerEdit(handlers.LISTENER_DNS, &Config)
 
 				t.EventAppend(p)
 				t.EventBroadcast("", p)

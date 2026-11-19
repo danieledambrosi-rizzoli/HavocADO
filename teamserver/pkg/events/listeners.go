@@ -1,6 +1,7 @@
 package events
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -89,6 +90,19 @@ func (listeners) ListenerAdd(FromUser string, Type int, Config any) packager.Pac
 		Package.Body.Info["Status"] = "Online"
 
 		break
+
+	case handlers.LISTENER_DNS:
+
+		Package.Body.Info = make(map[string]interface{})
+		Package.Body.Info = structs.Map(Config.(*handlers.DNS).Config)
+
+		Package.Body.Info["Protocol"] = handlers.AGENT_DNS
+		Package.Body.Info["Status"] = "Online"
+		Package.Body.Info["BindHost"] = Config.(*handlers.DNS).Config.BindHost
+		Package.Body.Info["BindPort"] = strconv.Itoa(Config.(*handlers.DNS).Config.BindPort)
+		Package.Body.Info["Frequency"] = strconv.Itoa(Config.(*handlers.DNS).Config.Frequency)
+
+		break
 	}
 
 	return Package
@@ -144,6 +158,19 @@ func (listeners) ListenerEdit(Type int, Config any) packager.Package {
 			}
 		}
 		Package.Body.Info["Hosts"] = Hosts
+
+		break
+
+	case handlers.LISTENER_DNS:
+
+		Package.Body.Info = make(map[string]interface{})
+		Package.Body.Info = structs.Map(Config.(*handlers.DNSConfig))
+
+		Package.Body.Info["Protocol"] = handlers.AGENT_DNS
+		Package.Body.Info["Status"] = "Online"
+		Package.Body.Info["BindHost"] = Config.(*handlers.DNSConfig).BindHost
+		Package.Body.Info["BindPort"] = strconv.Itoa(Config.(*handlers.DNSConfig).BindPort)
+		Package.Body.Info["Frequency"] = strconv.Itoa(Config.(*handlers.DNSConfig).Frequency)
 
 		break
 	}

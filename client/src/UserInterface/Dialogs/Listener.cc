@@ -163,6 +163,67 @@ NewListener::NewListener( QDialog* Dialog )
 
     formLayout_2->setWidget(0, QFormLayout::FieldRole, InputEndpoint);
 
+    // =============
+    // ==== DNS ====
+    // =============
+    PageDNS = new QWidget();
+    PageDNS->setObjectName(QString::fromUtf8("PageDNS"));
+    formLayout_DNS = new QFormLayout(PageDNS);
+    formLayout_DNS->setObjectName(QString::fromUtf8("formLayout_DNS"));
+
+    LabelDomain = new QLabel(PageDNS);
+    LabelDomain->setObjectName(QString::fromUtf8("LabelDomain"));
+    formLayout_DNS->setWidget(0, QFormLayout::LabelRole, LabelDomain);
+
+    InputDomain = new QLineEdit(PageDNS);
+    InputDomain->setObjectName(QString::fromUtf8("InputDomain"));
+    formLayout_DNS->setWidget(0, QFormLayout::FieldRole, InputDomain);
+
+    LabelDNSBindHost = new QLabel(PageDNS);
+    LabelDNSBindHost->setObjectName(QString::fromUtf8("LabelDNSBindHost"));
+    formLayout_DNS->setWidget(1, QFormLayout::LabelRole, LabelDNSBindHost);
+
+    InputDNSBindHost = new QLineEdit(PageDNS);
+    InputDNSBindHost->setObjectName(QString::fromUtf8("InputDNSBindHost"));
+    InputDNSBindHost->setText("0.0.0.0");
+    formLayout_DNS->setWidget(1, QFormLayout::FieldRole, InputDNSBindHost);
+
+    LabelDNSBindPort = new QLabel(PageDNS);
+    LabelDNSBindPort->setObjectName(QString::fromUtf8("LabelDNSBindPort"));
+    formLayout_DNS->setWidget(2, QFormLayout::LabelRole, LabelDNSBindPort);
+
+    InputDNSBindPort = new QLineEdit(PageDNS);
+    InputDNSBindPort->setObjectName(QString::fromUtf8("InputDNSBindPort"));
+    InputDNSBindPort->setText("53");
+    formLayout_DNS->setWidget(2, QFormLayout::FieldRole, InputDNSBindPort);
+
+    LabelRecordType = new QLabel(PageDNS);
+    LabelRecordType->setObjectName(QString::fromUtf8("LabelRecordType"));
+    formLayout_DNS->setWidget(3, QFormLayout::LabelRole, LabelRecordType);
+
+    ComboRecordType = new QComboBox(PageDNS);
+    ComboRecordType->setObjectName(QString::fromUtf8("ComboRecordType"));
+    ComboRecordType->addItem("TXT");
+    formLayout_DNS->setWidget(3, QFormLayout::FieldRole, ComboRecordType);
+
+    LabelEncoding = new QLabel(PageDNS);
+    LabelEncoding->setObjectName(QString::fromUtf8("LabelEncoding"));
+    formLayout_DNS->setWidget(4, QFormLayout::LabelRole, LabelEncoding);
+
+    ComboEncoding = new QComboBox(PageDNS);
+    ComboEncoding->setObjectName(QString::fromUtf8("ComboEncoding"));
+    ComboEncoding->addItem("base64url");
+    formLayout_DNS->setWidget(4, QFormLayout::FieldRole, ComboEncoding);
+
+    LabelFrequency = new QLabel(PageDNS);
+    LabelFrequency->setObjectName(QString::fromUtf8("LabelFrequency"));
+    formLayout_DNS->setWidget(5, QFormLayout::LabelRole, LabelFrequency);
+
+    InputFrequency = new QLineEdit(PageDNS);
+    InputFrequency->setObjectName(QString::fromUtf8("InputFrequency"));
+    InputFrequency->setText("30");
+    formLayout_DNS->setWidget(5, QFormLayout::FieldRole, InputFrequency);
+
     gridLayout_2->addWidget( StackWidgetConfigPages, 0, 0, 1, 1 );
 
 
@@ -280,6 +341,7 @@ NewListener::NewListener( QDialog* Dialog )
     StackWidgetConfigPages->addWidget( PageHTTP );
     StackWidgetConfigPages->addWidget( PageSMB );
     StackWidgetConfigPages->addWidget( PageExternal );
+    StackWidgetConfigPages->addWidget( PageDNS );
 
     ListenerDialog->setWindowTitle( "Create Listener" );
     LabelPayload->setText(QCoreApplication::translate("ListenerWidget", "Payload: ", nullptr));
@@ -315,11 +377,18 @@ NewListener::NewListener( QDialog* Dialog )
     LabelHostRotation->setText(QCoreApplication::translate("ListenerWidget", "Host Rotation: ", nullptr));
     LabelPipeName->setText(QCoreApplication::translate("ListenerWidget", "Pipe Name: ", nullptr));
     LabelEndpoint->setText(QCoreApplication::translate("ListenerWidget", "Endpoint: ", nullptr));
+    LabelDomain->setText(QCoreApplication::translate("ListenerWidget", "Domain: ", nullptr));
+    LabelDNSBindHost->setText(QCoreApplication::translate("ListenerWidget", "Bind Host: ", nullptr));
+    LabelDNSBindPort->setText(QCoreApplication::translate("ListenerWidget", "Bind Port: ", nullptr));
+    LabelRecordType->setText(QCoreApplication::translate("ListenerWidget", "Record Type: ", nullptr));
+    LabelEncoding->setText(QCoreApplication::translate("ListenerWidget", "Encoding: ", nullptr));
+    LabelFrequency->setText(QCoreApplication::translate("ListenerWidget", "Frequency (seconds): ", nullptr));
 
     ComboPayload->addItem( "Https" );
     ComboPayload->addItem( "Http" );
     ComboPayload->addItem( "Smb" );
     ComboPayload->addItem( "External" );
+    ComboPayload->addItem( "Dns" );
 
     ComboProxyType->addItem( "http" );
     ComboProxyType->addItem( "https" );
@@ -426,6 +495,10 @@ NewListener::NewListener( QDialog* Dialog )
         else if ( text.compare( HavocSpace::Listener::PayloadExternal ) == 0 )
         {
             StackWidgetConfigPages->setCurrentIndex( 2 );
+        }
+        else if ( text.compare( HavocSpace::Listener::PayloadDNS ) == 0 )
+        {
+            StackWidgetConfigPages->setCurrentIndex( 3 );
         }
         else
         {
@@ -568,6 +641,26 @@ MapStrStr NewListener::Start( Util::ListenerItem Item, bool Edit )
 
             InputEndpoint->setText( Info.Endpoint );
             InputEndpoint->setReadOnly( true );
+        }
+        else if ( Item.Protocol == Listener::PayloadDNS.toStdString() )
+        {
+            ComboPayload->setCurrentIndex( 4 );
+
+            auto Info = any_cast<Listener::DNS>( Item.Info );
+
+            InputDomain->setText( Info.Domain );
+            InputDNSBindHost->setText( Info.BindHost );
+            InputDNSBindPort->setText( Info.BindPort );
+            InputFrequency->setText( Info.Frequency );
+
+            if ( ! Info.RecordType.isEmpty() )
+                ComboRecordType->setCurrentText( Info.RecordType );
+            if ( ! Info.Encoding.isEmpty() )
+                ComboEncoding->setCurrentText( Info.Encoding );
+
+            // The bind address can only be changed by restarting the listener.
+            InputDNSBindHost->setReadOnly( true );
+            InputDNSBindPort->setReadOnly( true );
         }
         else
         {
@@ -715,6 +808,15 @@ MapStrStr NewListener::Start( Util::ListenerItem Item, bool Edit )
         }
 
         ListenerInfo.insert( { "Endpoint", InputEndpoint->text().toStdString() } );
+    }
+    else if ( Payload.compare( HavocSpace::Listener::PayloadDNS ) == 0 )
+    {
+        ListenerInfo.insert( { "Domain",     InputDomain->text().toStdString() } );
+        ListenerInfo.insert( { "BindHost",   InputDNSBindHost->text().toStdString() } );
+        ListenerInfo.insert( { "BindPort",   InputDNSBindPort->text().toStdString() } );
+        ListenerInfo.insert( { "RecordType", ComboRecordType->currentText().toStdString() } );
+        ListenerInfo.insert( { "Encoding",   ComboEncoding->currentText().toStdString() } );
+        ListenerInfo.insert( { "Frequency",  InputFrequency->text().toStdString() } );
     }
     else
     {
@@ -907,6 +1009,64 @@ void HavocNamespace::UserInterface::Dialogs::NewListener::onButton_Save()
         if ( InputEndpoint->text().isEmpty() )
         {
             MessageBox( "Listener Error", "No Endpoint specified", QMessageBox::Critical );
+
+            return;
+        }
+    }
+    else if ( Payload.compare( HavocSpace::Listener::PayloadDNS ) == 0 )
+    {
+        if ( InputListenerName->text().isEmpty() )
+        {
+            MessageBox( "Listener Error", "No Listener Name specified", QMessageBox::Critical );
+
+            return;
+        }
+
+        if ( InputDomain->text().isEmpty() )
+        {
+            MessageBox( "Listener Error", "No Domain specified", QMessageBox::Critical );
+
+            return;
+        }
+
+        if ( InputDomain->text().contains( " " ) || ! InputDomain->text().contains( '.' ) )
+        {
+            MessageBox( "Listener Error", "Domain is not a valid FQDN", QMessageBox::Critical );
+
+            return;
+        }
+
+        if ( InputDNSBindHost->text().isEmpty() )
+        {
+            MessageBox( "Listener Error", "No Bind Host specified", QMessageBox::Critical );
+
+            return;
+        }
+
+        if ( InputDNSBindPort->text().isEmpty() || ! is_number( InputDNSBindPort->text().toStdString() ) )
+        {
+            MessageBox( "Listener Error", "Bind Port is not a number", QMessageBox::Critical );
+
+            return;
+        }
+
+        if ( InputDNSBindPort->text().toInt() < 1 || InputDNSBindPort->text().toInt() > 65535 )
+        {
+            MessageBox( "Listener Error", "Bind Port is out of range", QMessageBox::Critical );
+
+            return;
+        }
+
+        if ( InputFrequency->text().isEmpty() || ! is_number( InputFrequency->text().toStdString() ) )
+        {
+            MessageBox( "Listener Error", "Frequency is not a number", QMessageBox::Critical );
+
+            return;
+        }
+
+        if ( InputFrequency->text().toInt() < 5 || InputFrequency->text().toInt() > 300 )
+        {
+            MessageBox( "Listener Error", "Frequency must be between 5 and 300 seconds", QMessageBox::Critical );
 
             return;
         }

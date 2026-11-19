@@ -51,6 +51,7 @@ public:
     QWidget*        PageHTTP;
     QWidget*        PageSMB;
     QWidget*        PageExternal;
+    QWidget*        PageDNS;
 
     QSpacerItem*    horizontalSpacer_2;
     QSpacerItem*    horizontalSpacer_3;
@@ -138,6 +139,21 @@ public:
     // Page External
     QLabel*         LabelEndpoint;
     QLineEdit*      InputEndpoint;
+
+    // Page DNS
+    QLabel*         LabelDomain;
+    QLineEdit*      InputDomain;
+    QLabel*         LabelDNSBindHost;
+    QLineEdit*      InputDNSBindHost;
+    QLabel*         LabelDNSBindPort;
+    QLineEdit*      InputDNSBindPort;
+    QLabel*         LabelRecordType;
+    QComboBox*      ComboRecordType;
+    QLabel*         LabelEncoding;
+    QComboBox*      ComboEncoding;
+    QLabel*         LabelFrequency;
+    QLineEdit*      InputFrequency;
+    QFormLayout*    formLayout_DNS;
 
 public:
     QDialog* ListenerDialog;

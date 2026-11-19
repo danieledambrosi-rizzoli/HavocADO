@@ -51,6 +51,7 @@ type UsersBlock struct {
 type Listeners struct {
 	ListenerHTTP     []*ListenerHTTP     `yaotl:"Http,block"`
 	ListenerSMB      []*ListenerSMB      `yaotl:"Smb,block"`
+	ListenerDNS      []*ListenerDNS      `yaotl:"Dns,block"`
 	ListenerExternal []*ListenerExternal `yaotl:"External,block"`
 }
 
@@ -92,6 +93,24 @@ type ListenerSMB struct {
 	KillDate string `yaotl:"KillDate,optional"`
 	// 8:00-17:00
 	WorkingHours string `yaotl:"WorkingHours,optional"`
+}
+
+type ListenerDNS struct {
+	Name   string `yaotl:"Name"`
+	Domain string `yaotl:"Domain"`
+
+	// BindHost/BindPort are optional. Defaults: 0.0.0.0:53.
+	BindHost string `yaotl:"BindHost,optional"`
+	BindPort int    `yaotl:"BindPort,optional"`
+
+	// 2006-01-02 15:04:05
+	KillDate string `yaotl:"KillDate,optional"`
+	// 8:00-17:00
+	WorkingHours string `yaotl:"WorkingHours,optional"`
+
+	RecordType string `yaotl:"RecordType,optional"`
+	Encoding   string `yaotl:"Encoding,optional"`
+	Frequency  int    `yaotl:"Frequency,optional"`
 }
 
 type ListenerExternal struct {

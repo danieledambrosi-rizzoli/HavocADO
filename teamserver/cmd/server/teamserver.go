@@ -311,6 +311,37 @@ func (t *Teamserver) Start() {
 			}
 		}
 
+		/* Start all DNS listeners */
+		for _, listener := range t.Profile.Config.Listener.ListenerDNS {
+			if listener.KillDate != "" {
+				t, err := time.Parse("2006-01-02 15:04:05", listener.KillDate)
+				if err != nil {
+					logger.Error("Failed to parse the kill date: " + err.Error())
+					return
+				}
+				KillDate = common.EpochTimeToSystemTime(t.Unix())
+			} else {
+				KillDate = 0
+			}
+
+			var HandlerData = handlers.DNSConfig{
+				Name:         listener.Name,
+				Domain:       listener.Domain,
+				BindHost:     listener.BindHost,
+				BindPort:     listener.BindPort,
+				KillDate:     KillDate,
+				WorkingHours: listener.WorkingHours,
+				RecordType:   listener.RecordType,
+				Encoding:     listener.Encoding,
+				Frequency:    listener.Frequency,
+			}
+
+			if err := t.ListenerStart(handlers.LISTENER_DNS, HandlerData); err != nil {
+				logger.Error("Failed to start listener from profile: " + err.Error())
+				return
+			}
+		}
+
 		/* Start all ExternalC2 listeners */
 		for _, listener := range t.Profile.Config.Listener.ListenerExternal {
 			var HandlerData = handlers.ExternalConfig{
@@ -447,6 +478,38 @@ func (t *Teamserver) Start() {
 			HandlerData.PipeName = Data["PipeName"].(string)
 
 			if err := t.ListenerStart(handlers.LISTENER_PIVOT_SMB, HandlerData); err != nil && err.Error() != "listener already exists" {
+				logger.SetStdOut(os.Stderr)
+				logger.Error("Failed to start listener from db: " + err.Error())
+				return
+			}
+
+			break
+
+		case handlers.AGENT_DNS:
+
+			var (
+				Data        = make(map[string]any)
+				HandlerData = handlers.DNSConfig{
+					Name: listener["Name"],
+				}
+			)
+
+			err := json.Unmarshal([]byte(listener["Config"]), &Data)
+			if err != nil {
+				logger.Debug("Failed to unmarshal json bytes to map: " + err.Error())
+				continue
+			}
+
+			HandlerData.Domain = dbString(Data["Domain"])
+			HandlerData.BindHost = dbString(Data["BindHost"])
+			HandlerData.BindPort = dbInt(Data["BindPort"])
+			HandlerData.RecordType = dbString(Data["RecordType"])
+			HandlerData.Encoding = dbString(Data["Encoding"])
+			HandlerData.Frequency = dbInt(Data["Frequency"])
+			HandlerData.KillDate, _ = strconv.ParseInt(dbString(Data["KillDate"]), 10, 64)
+			HandlerData.WorkingHours = dbString(Data["WorkingHours"])
+
+			if err := t.ListenerStart(handlers.LISTENER_DNS, HandlerData); err != nil && err.Error() != "listener already exists" {
 				logger.SetStdOut(os.Stderr)
 				logger.Error("Failed to start listener from db: " + err.Error())
 				return
@@ -951,4 +1014,39 @@ func (t *Teamserver) EndpointRemove(endpoint string) []*Endpoint {
 	}
 
 	return t.Endpoints
+}
+
+// dbString reads a listener config value that may have been persisted as a
+// string or as a JSON number.
+func dbString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case float64:
+		return strconv.FormatInt(int64(v), 10)
+	case int:
+		return strconv.Itoa(v)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	default:
+		return ""
+	}
+}
+
+// dbInt reads a listener config value that may have been persisted as a
+// string or as a JSON number.
+func dbInt(value any) int {
+	switch v := value.(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case string:
+		result, _ := strconv.Atoi(v)
+		return result
+	default:
+		return 0
+	}
 }
