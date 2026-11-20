@@ -174,6 +174,7 @@ func BuildPayloadMessage(Jobs []Job, AesKey []byte, AesIv []byte) []byte {
 	}
 
 	logger.Debug("PayloadPackage:\n", hex.Dump(PayloadPackage))
+	logger.FileLog("agent", "PayloadPackage:\n%s", hex.Dump(PayloadPackage))
 
 	return PayloadPackage
 }

@@ -24,6 +24,9 @@ Teamserver/data/x86_64-w64-mingw32-cross/
 # ignore havoc binary
 havoc
 
+# crypto/payload audit log (contains live session keys)
+teamserver/logs/
+
 # ignore data directory
 data/
 
