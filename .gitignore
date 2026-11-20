@@ -31,3 +31,22 @@ data/
 client/Build/
 client/Havoc
 client/Modules/
+
+# tool configuration files (agent workspace)
+.helix/
+.serena/
+.opencode/*
+!.opencode/rules/
+!.opencode/scripts/
+.python-version
+
+# build artifacts (cmake -B build)
+client/build/
+client/.cache/
+
+payloads/Demon/build/
+payloads/Demon/.cache/
+
+# pyenv / node files
+package.json
+package-lock.json
