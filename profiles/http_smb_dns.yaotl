@@ -3,8 +3,8 @@ Teamserver {
     Port = 40056
 
     Build {
-        Compiler64 = "/usr/bin/x86_64-w64-mingw32-gcc"
-        Compiler86 = "/usr/bin/i686-w64-mingw32-gcc"
+        Compiler64 = "/home/kali/workspace/Havoc/teamserver/data/x86_64-w64-mingw32-cross/bin/x86_64-w64-mingw32-gcc"
+        Compiler86 = "/home/kali/workspace/Havoc/teamserver/data/i686-w64-mingw32-cross/bin/i686-w64-mingw32-gcc"
         Nasm = "/usr/bin/nasm"
     }
 }
@@ -27,8 +27,8 @@ Listeners {
         ]
         HostBind     = "0.0.0.0" # the address where the listener should bind to. 
         HostRotation = "round-robin"
-        PortBind     = 443
-        PortConn     = 443
+        PortBind     = 8080
+        PortConn     = 8080
         Secure       = false # for now disabled so we can see the traffic content. (but alaways enabled this!!!)
         KillDate     = "2024-01-02 12:00:00"
         UserAgent    = "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
@@ -65,6 +65,18 @@ Listeners {
     Smb {
         Name     = "Pivot - Smb"
         PipeName = "demon_pipe"
+    }
+
+    Dns {
+        Name       = "DNS C2 Listener"
+        Domain     = "example.com"
+        BindHost   = "0.0.0.0"
+        BindPort   = 53
+        RecordType = "TXT"
+        Encoding   = "base64url"
+        Frequency  = 30
+        KillDate   = ""
+        WorkingHours = ""
     }
 }
 
