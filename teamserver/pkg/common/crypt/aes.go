@@ -1,10 +1,12 @@
 package crypt
 
 import (
-    "crypto/aes"
-    "crypto/cipher"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/hex"
+	"fmt"
 
-    "Havoc/pkg/logger"
+	"Havoc/pkg/logger"
 )
 
 func XCryptBytesAES256(XBytes []byte, AESKey []byte, AESIv []byte) []byte {
@@ -21,5 +23,8 @@ func XCryptBytesAES256(XBytes []byte, AESKey []byte, AESIv []byte) []byte {
     stream := cipher.NewCTR(block, AESIv)
     stream.XORKeyStream(ReverseXBytes, XBytes)
 
+    fmt.Println("Encryption Key", hex.EncodeToString(AESKey))
+    fmt.Println("IV Key", hex.EncodeToString(AESIv))
+    
     return ReverseXBytes
 }

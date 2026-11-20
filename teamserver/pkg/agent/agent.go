@@ -3,7 +3,7 @@ package agent
 import (
 	"bytes"
 	"encoding/binary"
-	//"encoding/hex"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,10 +11,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
-	"reflect"
 
 	"Havoc/pkg/common"
 	"Havoc/pkg/common/crypt"
@@ -173,7 +173,7 @@ func BuildPayloadMessage(Jobs []Job, AesKey []byte, AesIv []byte) []byte {
 		}
 	}
 
-	//logger.Debug("PayloadPackage:\n", hex.Dump(PayloadPackage))
+	logger.Debug("PayloadPackage:\n", hex.Dump(PayloadPackage))
 
 	return PayloadPackage
 }
