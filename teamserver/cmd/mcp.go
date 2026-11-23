@@ -93,14 +93,16 @@ func mcpFunc(cmd *cobra.Command, args []string) error {
 	}
 	defer opClient.Close()
 
-	// Run operator client to build state
-	if err := opClient.Run(ctx); err != nil {
-		return fmt.Errorf("operator client error: %w", err)
-	}
+	// Start operator client in background to build state
+	go func() {
+		if err := opClient.Run(ctx); err != nil {
+			logger.Error("Operator client error: " + err.Error())
+		}
+	}()
 
 	// Create MCP server
 	server := mcp.NewServer(opClient, mcpCfg)
 
-	// Serve over stdio
+	// Serve over stdio (this blocks)
 	return server.Serve(ctx, os.Stdin, os.Stdout)
 }

@@ -87,6 +87,7 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("websocket dial: %w", err)
 	}
+	logger.Debug("MCP: WebSocket connected to " + cfg.URL)
 
 	c := &Client{
 		cfg:          cfg,
@@ -105,14 +106,17 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	// Send login package immediately
 	passwordHash := HashPassword(cfg.Password)
 	loginPkg := LoginPackage(cfg.User, passwordHash)
+	logger.Debug("MCP: Sending login package for user " + cfg.User + " to " + cfg.URL)
+	
+	// Start read and write loops FIRST
+	go c.readLoop()
+	go c.writeLoop()
+	
 	if err := c.sendPacket(loginPkg); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("send login: %w", err)
 	}
-
-	// Start read and write loops
-	go c.readLoop()
-	go c.writeLoop()
+	logger.Debug("MCP: Login package sent successfully")
 
 	// Wait for login result
 	select {
@@ -164,9 +168,11 @@ func (c *Client) sendPacket(pkg *Package) error {
 }
 
 func (c *Client) writeLoop() {
+	logger.Debug("MCP: writeLoop started")
 	for {
 		select {
 		case req := <-c.writeCh:
+			logger.Debug("MCP: writeLoop got request")
 			if c.conn == nil {
 				req.done <- ErrNotConnected
 				continue
@@ -174,28 +180,35 @@ func (c *Client) writeLoop() {
 
 			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			err := c.conn.WriteMessage(websocket.BinaryMessage, req.data)
+			logger.Debug("MCP: writeLoop wrote message, err: " + fmt.Sprintf("%v", err))
 			req.done <- err
 
 		case <-c.closeCh:
+			logger.Debug("MCP: writeLoop exiting")
 			return
 		}
 	}
 }
 
 func (c *Client) readLoop() {
+	logger.Debug("MCP: readLoop started")
 	for {
+		logger.Debug("MCP: readLoop waiting for message...")
 		_, data, err := c.conn.ReadMessage()
 		if err != nil {
+			logger.Debug("MCP: Read error: " + err.Error())
 			c.readErrCh <- err
 			return
 		}
 
+		logger.Debug("MCP: Received package, length: " + fmt.Sprintf("%d", len(data)))
 		pkg, err := UnmarshalPackage(data)
 		if err != nil {
 			logger.Error("Failed to unmarshal package: " + err.Error())
 			continue
 		}
 
+		logger.Debug("MCP: Parsed package - Event: " + fmt.Sprintf("%d", pkg.Head.Event) + ", SubEvent: " + fmt.Sprintf("%d", pkg.Body.SubEvent))
 		c.lastPkg = pkg
 		c.handlePackage(pkg)
 	}
@@ -206,6 +219,7 @@ func (c *Client) handlePackage(pkg *Package) {
 	select {
 	case <-c.loginDone:
 		// Already logged in, process normally
+		logger.Debug("MCP: handlePackage post-login - Event: " + fmt.Sprintf("%d", pkg.Head.Event) + ", SubEvent: " + fmt.Sprintf("%d", pkg.Body.SubEvent))
 	default:
 		// Still waiting for login
 		if pkg.Head.Event == TypeInitConnection {
@@ -274,11 +288,28 @@ func (c *Client) handleListener(pkg *Package) {
 	case ListenerAdd, ListenerEdit:
 		listener.Protocol = info["Protocol"]
 		listener.Status = info["Status"]
+		
+		// Handle both event formats:
+		// 1. Full format from events.Listener.ListenerAdd: Hosts, HostBind, PortBind, PortConn, Secure
+		// 2. Simplified format from ListenerStartNotify: Host, Port
+		if hostBind, ok := info["HostBind"]; ok {
+			listener.HostBind = hostBind
+		} else if host, ok := info["Host"]; ok {
+			listener.HostBind = host
+		}
+		
+		if portBind, ok := info["PortBind"]; ok {
+			listener.PortBind = portBind
+		} else if port, ok := info["Port"]; ok {
+			listener.PortBind = port
+		}
+		
 		listener.Hosts = info["Hosts"]
-		listener.HostBind = info["HostBind"]
-		listener.PortBind = info["PortBind"]
 		listener.PortConn = info["PortConn"]
-		listener.Secure = info["Secure"] == "true"
+		
+		if secure, ok := info["Secure"]; ok {
+			listener.Secure = secure == "true"
+		}
 	case ListenerRem:
 		delete(c.listeners, name)
 	case ListenerErr:
@@ -376,8 +407,10 @@ func (c *Client) Run(ctx context.Context) error {
 	// This method waits for context cancellation or connection loss
 	select {
 	case <-ctx.Done():
+		logger.Debug("MCP: Run - context done")
 		return ctx.Err()
 	case err := <-c.readErrCh:
+		logger.Debug("MCP: Run - read error: " + err.Error())
 		c.mu.Lock()
 		c.status.Connected = false
 		c.status.LastError = err.Error()
@@ -392,6 +425,7 @@ func (c *Client) Run(ctx context.Context) error {
 		}
 		return err
 	case <-c.closeCh:
+		logger.Debug("MCP: Run - closeCh")
 		return ErrNotConnected
 	}
 }
@@ -552,6 +586,30 @@ func (c *Client) Listeners() []Listener {
 		result = append(result, *l)
 	}
 	return result
+}
+
+// StartListener sends a Listener.Add package to start a new listener.
+func (c *Client) StartListener(name, protocol string, info map[string]string) error {
+	pkg := ListenerAddPackage(c.cfg.User, name, protocol, info)
+	return c.sendPacket(pkg)
+}
+
+// EditListener sends a Listener.Edit package to modify an existing listener.
+func (c *Client) EditListener(name string, info map[string]string) error {
+	pkg := ListenerEditPackage(c.cfg.User, name, info)
+	return c.sendPacket(pkg)
+}
+
+// RemoveListener sends a Listener.Remove package to remove a listener.
+func (c *Client) RemoveListener(name string) error {
+	pkg := ListenerRemovePackage(c.cfg.User, name)
+	return c.sendPacket(pkg)
+}
+
+// GeneratePayload sends a Gate.Stageless package to generate a payload.
+func (c *Client) GeneratePayload(agentType, listener, arch, format, config string) error {
+	pkg := GateStagelessPackage(c.cfg.User, agentType, listener, arch, format, config)
+	return c.sendPacket(pkg)
 }
 
 func parseInt(s string) int {

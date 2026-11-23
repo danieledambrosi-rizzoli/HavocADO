@@ -14,11 +14,10 @@ type Package struct {
 }
 
 type Head struct {
-	Event    int    `json:"Event"`
-	User     string `json:"User"`
-	Time     string `json:"Time"`
-	OneTime  string `json:"OneTime"`
-	SubEvent int    `json:"SubEvent"` // This is actually in Body, but we keep it here for convenience
+	Event   int    `json:"Event"`
+	User    string `json:"User"`
+	Time    string `json:"Time"`
+	OneTime string `json:"OneTime"`
 }
 
 type Body struct {
@@ -139,4 +138,86 @@ func ParsePackageInfo(info map[string]interface{}) map[string]string {
 		}
 	}
 	return result
+}
+
+// ListenerAddPackage creates a Listener.Add package.
+func ListenerAddPackage(user, name, protocol string, info map[string]string) *Package {
+	infoMap := make(map[string]interface{}, len(info)+2)
+	infoMap["Name"] = name
+	infoMap["Protocol"] = protocol
+	for k, v := range info {
+		infoMap[k] = v
+	}
+
+	return &Package{
+		Head: Head{
+			Event: TypeListener,
+			User:  user,
+			Time:  "",
+		},
+		Body: Body{
+			SubEvent: ListenerAdd,
+			Info:     infoMap,
+		},
+	}
+}
+
+// ListenerEditPackage creates a Listener.Edit package.
+func ListenerEditPackage(user, name string, info map[string]string) *Package {
+	infoMap := make(map[string]interface{}, len(info)+1)
+	infoMap["Name"] = name
+	for k, v := range info {
+		infoMap[k] = v
+	}
+
+	return &Package{
+		Head: Head{
+			Event: TypeListener,
+			User:  user,
+			Time:  "",
+		},
+		Body: Body{
+			SubEvent: ListenerEdit,
+			Info:     infoMap,
+		},
+	}
+}
+
+// ListenerRemovePackage creates a Listener.Remove package.
+func ListenerRemovePackage(user, name string) *Package {
+	return &Package{
+		Head: Head{
+			Event: TypeListener,
+			User:  user,
+			Time:  "",
+		},
+		Body: Body{
+			SubEvent: ListenerRem,
+			Info: map[string]interface{}{
+				"Name": name,
+			},
+		},
+	}
+}
+
+// GateStagelessPackage creates a Gate.Stageless package for payload generation.
+func GateStagelessPackage(user, agentType, listener, arch, format, config string) *Package {
+	return &Package{
+		Head: Head{
+			Event: TypeGate,
+			User:  user,
+			Time:  "",
+			OneTime: "true",
+		},
+		Body: Body{
+			SubEvent: GateStageless,
+			Info: map[string]interface{}{
+				"AgentType": agentType,
+				"Listener":  listener,
+				"Arch":      arch,
+				"Format":    format,
+				"Config":    config,
+			},
+		},
+	}
 }

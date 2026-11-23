@@ -1,8 +1,8 @@
 ---
 feature: havoc-mcp-server
-status: active
+status: shipped
 owner: TBD
-verified_against: 
+verified_against: 56e4ec1 2026-11-23
 ---
 
 ## Intent

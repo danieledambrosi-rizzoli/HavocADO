@@ -213,6 +213,77 @@ func (s *Server) registerTools() {
 		ReadOnly: true,
 		Handler:  s.handleGetTask,
 	})
+
+	// Listener management tools (Phase 4)
+	s.registerTool(&Tool{
+		Name:        "start_listener",
+		Description: "Start a new listener (HTTP/HTTPS/SMB/External)",
+		InputSchema: mustMarshal(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":     map[string]any{"type": "string"},
+				"protocol": map[string]any{"type": "string", "enum": []string{"http", "https", "smb", "external"}},
+				"config":   map[string]any{"type": "object", "additionalProperties": true},
+			},
+			"required": []string{"name", "protocol", "config"},
+		}),
+		ReadOnly: false,
+		Handler:  s.handleStartListener,
+	})
+
+	s.registerTool(&Tool{
+		Name:        "edit_listener",
+		Description: "Edit an existing listener",
+		InputSchema: mustMarshal(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":   map[string]any{"type": "string"},
+				"config": map[string]any{"type": "object", "additionalProperties": true},
+			},
+			"required": []string{"name", "config"},
+		}),
+		ReadOnly: false,
+		Handler:  s.handleEditListener,
+	})
+
+	s.registerTool(&Tool{
+		Name:        "remove_listener",
+		Description: "Remove a listener",
+		InputSchema: mustMarshal(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string"},
+			},
+			"required": []string{"name"},
+		}),
+		ReadOnly: false,
+		Handler:  s.handleRemoveListener,
+	})
+
+	// Payload generation tool (Phase 5)
+	s.registerTool(&Tool{
+		Name:        "generate_payload",
+		Description: "Generate a payload (Windows EXE, DLL, shellcode, etc.)",
+		InputSchema: mustMarshal(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"agent_type": map[string]any{"type": "string", "enum": []string{"Demon"}},
+				"listener":   map[string]any{"type": "string"},
+				"arch":       map[string]any{"type": "string", "enum": []string{"x64", "x86"}},
+				"format": map[string]any{"type": "string", "enum": []string{
+					"Windows Exe",
+					"Windows Service Exe",
+					"Windows Dll",
+					"Windows Reflective Dll",
+					"Windows Shellcode",
+				}},
+				"config": map[string]any{"type": "string"},
+			},
+			"required": []string{"agent_type", "listener", "arch", "format", "config"},
+		}),
+		ReadOnly: false,
+		Handler:  s.handleGeneratePayload,
+	})
 }
 
 func (s *Server) registerTool(t *Tool) {
@@ -807,4 +878,116 @@ func getInt(m map[string]any, key string) int {
 		}
 	}
 	return 0
+}
+
+// Listener management handlers (Phase 4)
+
+func (s *Server) handleStartListener(ctx context.Context, args json.RawMessage) (any, error) {
+	var params struct {
+		Name     string         `json:"name"`
+		Protocol string         `json:"protocol"`
+		Config   map[string]any `json:"config"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return nil, err
+	}
+
+	// Convert config to string map
+	info := make(map[string]string)
+	for k, v := range params.Config {
+		info[k] = fmt.Sprintf("%v", v)
+	}
+
+	// Map protocol to teamserver protocol
+	protocol := params.Protocol
+	switch protocol {
+	case "http":
+		protocol = "HTTP"
+	case "https":
+		protocol = "HTTPS"
+	case "smb":
+		protocol = "SMB"
+	case "external":
+		protocol = "External"
+	}
+
+	if err := s.opClient.StartListener(params.Name, protocol, info); err != nil {
+		return nil, fmt.Errorf("start listener: %w", err)
+	}
+
+	return map[string]any{
+		"name":     params.Name,
+		"protocol": protocol,
+		"status":   "started",
+	}, nil
+}
+
+func (s *Server) handleEditListener(ctx context.Context, args json.RawMessage) (any, error) {
+	var params struct {
+		Name   string         `json:"name"`
+		Config map[string]any `json:"config"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return nil, err
+	}
+
+	info := make(map[string]string)
+	for k, v := range params.Config {
+		info[k] = fmt.Sprintf("%v", v)
+	}
+
+	if err := s.opClient.EditListener(params.Name, info); err != nil {
+		return nil, fmt.Errorf("edit listener: %w", err)
+	}
+
+	return map[string]any{
+		"name":   params.Name,
+		"status": "edited",
+	}, nil
+}
+
+func (s *Server) handleRemoveListener(ctx context.Context, args json.RawMessage) (any, error) {
+	var params struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return nil, err
+	}
+
+	if err := s.opClient.RemoveListener(params.Name); err != nil {
+		return nil, fmt.Errorf("remove listener: %w", err)
+	}
+
+	return map[string]any{
+		"name":   params.Name,
+		"status": "removed",
+	}, nil
+}
+
+// Payload generation handler (Phase 5)
+
+func (s *Server) handleGeneratePayload(ctx context.Context, args json.RawMessage) (any, error) {
+	var params struct {
+		AgentType string `json:"agent_type"`
+		Listener  string `json:"listener"`
+		Arch      string `json:"arch"`
+		Format    string `json:"format"`
+		Config    string `json:"config"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return nil, err
+	}
+
+	if err := s.opClient.GeneratePayload(params.AgentType, params.Listener, params.Arch, params.Format, params.Config); err != nil {
+		return nil, fmt.Errorf("generate payload: %w", err)
+	}
+
+	return map[string]any{
+		"agent_type": params.AgentType,
+		"listener":   params.Listener,
+		"arch":       params.Arch,
+		"format":     params.Format,
+		"status":     "generation_started",
+		"note":       "Payload will be delivered via Gate.Stageless response. Use get_output to retrieve.",
+	}, nil
 }

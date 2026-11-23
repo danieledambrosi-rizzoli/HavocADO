@@ -41,7 +41,11 @@ func DefaultConfig() Config {
 func (c *Config) TLSConfig() (*tls.Config, error) {
 	cfg := &tls.Config{
 		InsecureSkipVerify: c.Insecure,
-		ServerName:         c.tlsServerName(),
+	}
+
+	// Only set ServerName if not using insecure mode
+	if !c.Insecure {
+		cfg.ServerName = c.tlsServerName()
 	}
 
 	if c.TLSCA != "" {

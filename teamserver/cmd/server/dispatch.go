@@ -510,6 +510,17 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						}
 						return true
 					})
+				} else {
+					// Notify all clients about the new listener
+					t.ListenerStartNotify(map[string]any{
+						"Name":     pk.Body.Info["Name"].(string),
+						"Protocol": "HTTP",
+						"Host":     Config.HostBind,
+						"Port":     Config.PortBind,
+						"Error":    "",
+						"Status":   "Online",
+						"Info":     "",
+					})
 				}
 
 				break
@@ -542,6 +553,16 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 							return false
 						}
 						return true
+					})
+				} else {
+					t.ListenerStartNotify(map[string]any{
+						"Name":     pk.Body.Info["Name"].(string),
+						"Protocol": "SMB",
+						"Host":     "",
+						"Port":     "",
+						"Error":    "",
+						"Status":   "Online",
+						"Info":     "",
 					})
 				}
 
@@ -577,6 +598,16 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						}
 						return true
 					})
+				} else {
+					t.ListenerStartNotify(map[string]any{
+						"Name":     pk.Body.Info["Name"].(string),
+						"Protocol": "External",
+						"Host":     "",
+						"Port":     "",
+						"Error":    "",
+						"Status":   "Online",
+						"Info":     "",
+					})
 				}
 
 				break
@@ -610,6 +641,16 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 							return false
 						}
 						return true
+					})
+				} else {
+					t.ListenerStartNotify(map[string]any{
+						"Name":     Config.Name,
+						"Protocol": "DNS",
+						"Host":     Config.BindHost,
+						"Port":     strconv.Itoa(Config.BindPort),
+						"Error":    "",
+						"Status":   "Online",
+						"Info":     "",
 					})
 				}
 
