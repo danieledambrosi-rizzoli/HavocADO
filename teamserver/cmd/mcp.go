@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"Havoc/pkg/logger"
 	"Havoc/pkg/mcp"
@@ -60,11 +61,15 @@ func mcpFunc(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("password is required (--password or HAVOC_MCP_PASSWORD)")
 	}
 
-	// Parse allow-tools
+	// Parse allow-tools (comma-separated)
 	var allowedTools []string
 	if mcpFlags.AllowTools != "" {
-		allowedTools = []string{mcpFlags.AllowTools}
-		// TODO: split by comma properly
+		for _, tool := range strings.Split(mcpFlags.AllowTools, ",") {
+			tool = strings.TrimSpace(tool)
+			if tool != "" {
+				allowedTools = append(allowedTools, tool)
+			}
+		}
 	}
 
 	// Create operator config

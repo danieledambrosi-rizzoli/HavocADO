@@ -74,10 +74,39 @@ Mappings match C++ client (`client/src/Havoc/Demon/ConsoleInput.cc`).
 | `--tls-ca` | `HAVOC_MCP_TLS_CA` | — |
 | `--insecure` | — | `false` |
 | `--read-only` | — | `false` |
-| `--allow-tools` | — | all |
-| `--audit-log` | — | `stderr` |
+| `--allow-tools` | — | all (comma-separated list) |
+| `--audit-log` | — | `stderr` (or file path) |
 | `--max-output-bytes` | — | `262144` |
 | `--no-reconnect` | — | `false` |
+
+### Read-Only Mode
+
+When `--read-only` is enabled, all tasking tools (`send_command`, `send_raw_command`, `start_listener`, `edit_listener`, `remove_listener`, `generate_payload`) are disabled. Only read-only tools (`teamserver_status`, `list_sessions`, `get_session`, `list_listeners`, `get_output`, `wait_for_output`, `get_task`) remain available.
+
+The `--allow-tools` flag accepts a comma-separated list of tool names to explicitly allow, overriding the read-only restriction for those specific tools. For example: `--read-only --allow-tools=send_command,get_output`.
+
+### Audit Logging
+
+The `--audit-log` flag controls audit logging destination:
+- `stderr` (default): Write audit entries to stderr
+- File path: Write audit entries to the specified file (append-only, mode 0600)
+
+Audit log format (security-compliant, precise):
+```
+2026-11-23 15:04:05 [mcp-audit] user=mcp tool=send_command status=start args={"session_id":"abc123","command":"shell","args":{"command":"[REDACTED]"}
+2026-11-23 15:04:06 [mcp-audit] user=mcp tool=send_command status=success args={"session_id":"abc123","command":"shell","args":{"command":"[REDACTED]"}
+2026-11-23 15:04:07 [mcp-audit] user=mcp tool=generate_payload status=error args={"agent_type":"Demon","listener":"http","arch":"x64","format":"Windows Exe","config":"[REDACTED]"} error="listener not found"
+```
+
+Fields logged per entry:
+- `timestamp` - ISO-like timestamp with second precision
+- `user` - Operator username from teamserver authentication
+- `tool` - MCP tool name invoked
+- `status` - One of `start`, `success`, `error`
+- `args` - JSON arguments with sensitive fields redacted (`password`, `secret`, `key`, `token`, `command_line`, `config`)
+- `error` - Error message (only on `status=error`)
+
+The audit log file is created with mode 0600 and parent directories with mode 0700, following the teamserver's security practices for sensitive logs (see `teamserver/pkg/logger/file.go`).
 
 ## Profile impact
 
@@ -104,6 +133,9 @@ The MCP operator name must be distinct from any connected GUI operator.
    ./havoc mcp --teamserver wss://127.0.0.1:40056 --user mcp --password change-me --tls-ca data/server.cert
    ```
 4. Verify `initialize`, `tools/list`, `teamserver_status`, `list_sessions`, `list_listeners`
+5. Verify read-only mode: `--read-only` should hide tasking tools from `tools/list`
+6. Verify audit logging: `--audit-log /tmp/mcp-audit.log` should create file with entries on tool calls
+7. Verify `--allow-tools` overrides read-only for specific tools
 
 ## Open questions
 
@@ -111,3 +143,9 @@ The MCP operator name must be distinct from any connected GUI operator.
 2. Should MCP output include `HAVOC_CONSOLE_MESSAGE` (status noise) by default, or only agent output with an opt-in flag?
 3. Payload generation writes executables to disk. Is that in scope at all, and where should artifacts live (`data/loot/` vs a user-supplied directory)?
 4. Should listener passwords (proxy credentials) be accepted as tool args, or only from a config file? Tool args end up in conversation logs.
+
+## Resolved (this commit)
+
+- ✅ `--allow-tools` now properly parses comma-separated tool names
+- ✅ Audit logging to file implemented with security-compliant format (mode 0600, sensitive field redaction, precise status tracking)
+- ✅ Read-only mode fully enforced at tool registration time

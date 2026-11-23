@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,11 +65,12 @@ type Tool struct {
 
 // Server is the MCP server.
 type Server struct {
-	opClient *operator.Client
-	cfg      Config
-	tools    map[string]*Tool
-	mu       sync.RWMutex
-	auditLog io.Writer
+	opClient   *operator.Client
+	cfg        Config
+	tools      map[string]*Tool
+	mu         sync.RWMutex
+	auditLog   *os.File
+	auditLogMu sync.Mutex
 }
 
 // NewServer creates a new MCP server.
@@ -75,7 +79,7 @@ func NewServer(opClient *operator.Client, cfg Config) *Server {
 		opClient: opClient,
 		cfg:      cfg,
 		tools:    make(map[string]*Tool),
-		auditLog: nil, // Will be set in Serve
+		auditLog: nil,
 	}
 
 	s.registerTools()
@@ -331,9 +335,12 @@ func (s *Server) listTools() []Tool {
 
 // Serve runs the MCP server over stdio.
 func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
-	// Set up audit log
+	// Set up audit log file
 	if s.cfg.AuditLog != "" && s.cfg.AuditLog != "stderr" {
-		// TODO: open file for audit log
+		if err := s.openAuditLog(); err != nil {
+			return fmt.Errorf("failed to open audit log: %w", err)
+		}
+		defer s.closeAuditLog()
 	}
 
 	scanner := bufio.NewScanner(in)
@@ -371,6 +378,40 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	}
 
 	return nil
+}
+
+func (s *Server) openAuditLog() error {
+	s.auditLogMu.Lock()
+	defer s.auditLogMu.Unlock()
+
+	if s.auditLog != nil {
+		return nil // Already open
+	}
+
+	// Ensure directory exists
+	dir := filepath.Dir(s.cfg.AuditLog)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create audit log directory: %w", err)
+	}
+
+	// Open file in append-only mode with restricted permissions (0600)
+	file, err := os.OpenFile(s.cfg.AuditLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("open audit log file: %w", err)
+	}
+
+	s.auditLog = file
+	return nil
+}
+
+func (s *Server) closeAuditLog() {
+	s.auditLogMu.Lock()
+	defer s.auditLogMu.Unlock()
+
+	if s.auditLog != nil {
+		s.auditLog.Close()
+		s.auditLog = nil
+	}
 }
 
 func (s *Server) handleRequest(ctx context.Context, req *Request) *Response {
@@ -471,14 +512,19 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 		return s.errorResponse(req.ID, MethodNotFound, "Tool not found", params.Name)
 	}
 
-	// Audit log
-	s.auditToolCall(params.Name, params.Arguments)
+	// Audit log - tool call start
+	s.auditToolCall(params.Name, params.Arguments, "start", "")
 
 	// Call handler
 	result, err := tool.Handler(ctx, params.Arguments)
 	if err != nil {
+		// Audit log - tool call error
+		s.auditToolCall(params.Name, params.Arguments, "error", err.Error())
 		return s.errorResponse(req.ID, InternalError, "Tool execution failed", err.Error())
 	}
+
+	// Audit log - tool call success
+	s.auditToolCall(params.Name, params.Arguments, "success", "")
 
 	// Format result as MCP tool result
 	content := []map[string]any{
@@ -522,10 +568,74 @@ func (s *Server) writeError(enc *json.Encoder, id json.RawMessage, code int, mes
 	enc.Encode(resp)
 }
 
-func (s *Server) auditToolCall(name string, args json.RawMessage) {
-	// TODO: implement audit logging
-	_ = name
-	_ = args
+func (s *Server) auditToolCall(name string, args json.RawMessage, status, errorMsg string) {
+	// Get operator username from status
+	opStatus := s.opClient.Status()
+	user := opStatus.User
+	if user == "" {
+		user = "unknown"
+	}
+
+	// Sanitize arguments for logging (remove sensitive fields)
+	sanitizedArgs := sanitizeArgs(args)
+
+	// Build audit entry with precise security-compliant fields
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	entry := fmt.Sprintf("%s [mcp-audit] user=%s tool=%s status=%s args=%s",
+		timestamp, user, name, status, string(sanitizedArgs))
+
+	if errorMsg != "" {
+		entry += fmt.Sprintf(" error=%q", errorMsg)
+	}
+	entry += "\n"
+
+	// Write to file if configured
+	if s.cfg.AuditLog != "" && s.cfg.AuditLog != "stderr" {
+		s.auditLogMu.Lock()
+		if s.auditLog != nil {
+			s.auditLog.WriteString(entry)
+		}
+		s.auditLogMu.Unlock()
+	}
+
+	// Also log to stderr for visibility (matches teamserver logger behavior)
+	if s.cfg.AuditLog == "stderr" || s.cfg.AuditLog == "" {
+		os.Stderr.WriteString(entry)
+	}
+}
+
+// sanitizeArgs removes sensitive fields from arguments before logging.
+// Returns the sanitized JSON as RawMessage.
+func sanitizeArgs(args json.RawMessage) json.RawMessage {
+	if len(args) == 0 {
+		return json.RawMessage("{}")
+	}
+
+	var data map[string]any
+	if err := json.Unmarshal(args, &data); err != nil {
+		// If we can't parse, return empty object to avoid logging raw data
+		return json.RawMessage("{}")
+	}
+
+	// Fields that should never be logged
+	sensitiveKeys := map[string]bool{
+		"password":     true,
+		"secret":       true,
+		"key":          true,
+		"token":        true,
+		"command_line": true, // May contain sensitive commands
+		"config":       true, // Payload config may contain sensitive data
+	}
+
+	for key := range data {
+		lowerKey := strings.ToLower(key)
+		if sensitiveKeys[lowerKey] {
+			data[key] = "[REDACTED]"
+		}
+	}
+
+	sanitized, _ := json.Marshal(data)
+	return sanitized
 }
 
 func mustMarshal(v any) json.RawMessage {
