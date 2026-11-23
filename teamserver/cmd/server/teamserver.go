@@ -887,6 +887,71 @@ func (t *Teamserver) SendAllPackagesToNewClient(ClientID string) {
 		}
 	}
 
+	// send all listeners to the new client
+	for _, listener := range t.Listeners {
+		var pk packager.Package
+		pk.Head.Event = packager.Type.Listener.Type
+		pk.Head.Time = time.Now().Format("02/01/2006 15:04:05")
+		pk.Body.SubEvent = packager.Type.Listener.Add
+
+		switch listener.Type {
+		case handlers.LISTENER_HTTP:
+			httpConfig := listener.Config.(*handlers.HTTP)
+			protocol := handlers.AGENT_HTTP
+			if httpConfig.Config.Secure {
+				protocol = handlers.AGENT_HTTPS
+			}
+			pk.Body.Info = map[string]any{
+				"Name":     listener.Name,
+				"Protocol": protocol,
+				"Host":     httpConfig.Config.HostBind,
+				"Port":     httpConfig.Config.PortBind,
+				"Error":    "",
+				"Status":   "Online",
+				"Info":     "",
+			}
+		case handlers.LISTENER_PIVOT_SMB:
+			_ = listener.Config.(*handlers.SMB)
+			pk.Body.Info = map[string]any{
+				"Name":     listener.Name,
+				"Protocol": "SMB",
+				"Host":     "",
+				"Port":     "",
+				"Error":    "",
+				"Status":   "Online",
+				"Info":     "",
+			}
+		case handlers.LISTENER_EXTERNAL:
+			_ = listener.Config.(*handlers.External)
+			pk.Body.Info = map[string]any{
+				"Name":     listener.Name,
+				"Protocol": "External",
+				"Host":     "",
+				"Port":     "",
+				"Error":    "",
+				"Status":   "Online",
+				"Info":     "",
+			}
+		case handlers.LISTENER_DNS:
+			dnsConfig := listener.Config.(*handlers.DNS)
+			pk.Body.Info = map[string]any{
+				"Name":     listener.Name,
+				"Protocol": "DNS",
+				"Host":     dnsConfig.Config.BindHost,
+				"Port":     strconv.Itoa(dnsConfig.Config.BindPort),
+				"Error":    "",
+				"Status":   "Online",
+				"Info":     "",
+			}
+		}
+
+		err := t.SendEvent(ClientID, pk)
+		if err != nil {
+			logger.Error("error while sending listener info to client("+ClientID+"): ", err)
+			return
+		}
+	}
+
 	// send all the agents that are alive right now to the new client
 	for _, demon := range t.Agents.Agents {
 		if demon.Active == false {
