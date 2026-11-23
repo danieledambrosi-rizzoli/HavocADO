@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-11-23T19:40:57+01:00",
+  "passed": 2,
+  "failed": 16,
+  "skipped": 1,
+  "total": 19,
+  "repository": "/home/kali/Havoc",
+  "commit": "7a772aa366ac4591777aec06748481efefa1a041",
+  "branch": "v1"
+}
