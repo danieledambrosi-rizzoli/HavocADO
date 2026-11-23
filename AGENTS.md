@@ -133,6 +133,9 @@ package names from memory.
 These rules are mandatory for every agent session. They exist to keep changes
 reviewable, reversible, and grounded in the actual code.
 
+### 5.0 Web Fetch
+- **Every time** you need to fetch anything from the web, `mcp-server-fetch` to get it MD-formatted.
+
 ### 5.1 Git workflow
 
 - **One feature per branch.** Create a new branch from the current `main`

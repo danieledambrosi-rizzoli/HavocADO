@@ -1,5 +1,4 @@
-# ignore .idea
-*/.idea/
+pyrightconfig.json
 
 # ignore cmake generated stuff
 Client/Build
