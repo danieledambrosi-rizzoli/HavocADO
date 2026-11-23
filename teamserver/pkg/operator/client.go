@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/url"
@@ -41,6 +42,10 @@ type Client struct {
 	outputs      map[string]*ringBuffer
 	pendingTasks map[string]*Task
 	seqCounter   uint64
+
+	// For payload generation
+	payloadCh    chan *Payload
+	payloadMu    sync.Mutex
 
 	// For login synchronization
 	loginDone    chan struct{}
@@ -257,6 +262,8 @@ func (c *Client) handlePackage(pkg *Package) {
 		c.handleChat(pkg)
 	case TypeTeamserver:
 		c.handleTeamserver(pkg)
+	case TypeGate:
+		c.handleGate(pkg)
 	}
 }
 
@@ -400,6 +407,44 @@ func (c *Client) handleChat(pkg *Package) {
 
 func (c *Client) handleTeamserver(pkg *Package) {
 	// Teamserver log events
+}
+
+func (c *Client) handleGate(pkg *Package) {
+	info := ParsePackageInfo(pkg.Body.Info)
+
+	switch pkg.Body.SubEvent {
+	case GateStageless:
+		// Check if this is a payload response (has PayloadArray)
+		if payloadB64, ok := info["PayloadArray"]; ok && payloadB64 != "" {
+			data, err := base64.StdEncoding.DecodeString(payloadB64)
+			if err != nil {
+				logger.Error("Failed to decode payload: " + err.Error())
+				return
+			}
+
+			payload := &Payload{
+				AgentType: info["AgentType"],
+				Listener:  info["Listener"],
+				Arch:      info["Arch"],
+				Format:    info["Format"],
+				FileName:  info["FileName"],
+				Data:      data,
+			}
+
+			// Send to waiting caller
+			c.payloadMu.Lock()
+			ch := c.payloadCh
+			c.payloadMu.Unlock()
+
+			if ch != nil {
+				select {
+				case ch <- payload:
+				default:
+					logger.Warn("Payload channel full or nil, dropping payload")
+				}
+			}
+		}
+	}
 }
 
 func (c *Client) Run(ctx context.Context) error {
@@ -606,10 +651,42 @@ func (c *Client) RemoveListener(name string) error {
 	return c.sendPacket(pkg)
 }
 
-// GeneratePayload sends a Gate.Stageless package to generate a payload.
-func (c *Client) GeneratePayload(agentType, listener, arch, format, config string) error {
+// GeneratePayload sends a Gate.Stageless package to generate a payload and waits for the result.
+func (c *Client) GeneratePayload(ctx context.Context, agentType, listener, arch, format, config string) (*Payload, error) {
+	// Create a channel to receive the payload
+	payloadCh := make(chan *Payload, 1)
+
+	c.payloadMu.Lock()
+	c.payloadCh = payloadCh
+	c.payloadMu.Unlock()
+
+	// Send the generation request
 	pkg := GateStagelessPackage(c.cfg.User, agentType, listener, arch, format, config)
-	return c.sendPacket(pkg)
+	if err := c.sendPacket(pkg); err != nil {
+		c.payloadMu.Lock()
+		c.payloadCh = nil
+		c.payloadMu.Unlock()
+		return nil, fmt.Errorf("send packet: %w", err)
+	}
+
+	// Wait for the payload or context cancellation
+	select {
+	case payload := <-payloadCh:
+		c.payloadMu.Lock()
+		c.payloadCh = nil
+		c.payloadMu.Unlock()
+		return payload, nil
+	case <-ctx.Done():
+		c.payloadMu.Lock()
+		c.payloadCh = nil
+		c.payloadMu.Unlock()
+		return nil, ctx.Err()
+	case <-time.After(5 * time.Minute):
+		c.payloadMu.Lock()
+		c.payloadCh = nil
+		c.payloadMu.Unlock()
+		return nil, fmt.Errorf("payload generation timeout")
+	}
 }
 
 func parseInt(s string) int {

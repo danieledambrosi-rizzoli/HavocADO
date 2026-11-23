@@ -3,6 +3,7 @@ package mcp
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1088,16 +1089,22 @@ func (s *Server) handleGeneratePayload(ctx context.Context, args json.RawMessage
 		return nil, err
 	}
 
-	if err := s.opClient.GeneratePayload(params.AgentType, params.Listener, params.Arch, params.Format, params.Config); err != nil {
+	payload, err := s.opClient.GeneratePayload(ctx, params.AgentType, params.Listener, params.Arch, params.Format, params.Config)
+	if err != nil {
 		return nil, fmt.Errorf("generate payload: %w", err)
 	}
 
+	// Encode payload as base64 for transport
+	payloadB64 := base64.StdEncoding.EncodeToString(payload.Data)
+
 	return map[string]any{
-		"agent_type": params.AgentType,
-		"listener":   params.Listener,
-		"arch":       params.Arch,
-		"format":     params.Format,
-		"status":     "generation_started",
-		"note":       "Payload will be delivered via Gate.Stageless response. Use get_output to retrieve.",
+		"agent_type":   params.AgentType,
+		"listener":     params.Listener,
+		"arch":         params.Arch,
+		"format":       params.Format,
+		"file_name":    payload.FileName,
+		"payload_b64":  payloadB64,
+		"payload_size": len(payload.Data),
+		"status":       "generated",
 	}, nil
 }

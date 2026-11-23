@@ -76,6 +76,16 @@ type Task struct {
 	SentAt       time.Time
 }
 
+// Payload represents a generated payload.
+type Payload struct {
+	AgentType string
+	Listener  string
+	Arch      string
+	Format    string
+	FileName  string
+	Data      []byte
+}
+
 // ringBuffer is a bounded ring buffer for output events.
 type ringBuffer struct {
 	buf     []OutputEvent
