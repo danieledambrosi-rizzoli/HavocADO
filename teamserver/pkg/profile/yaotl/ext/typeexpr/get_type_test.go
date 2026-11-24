@@ -318,7 +318,7 @@ func TestGetTypeJSON(t *testing.T) {
             }
 
             type TestContent struct {
-                Expr hcl.Expression `hcl:"expr"`
+                Expr hcl.Expression `yaotl:"expr"`
             }
             var content TestContent
             diags = gohcl.DecodeBody(file.Body, nil, &content)
