@@ -510,8 +510,6 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						}
 						return true
 					})
-				} else {
-					t.notifyListenerStarted(Config.Name, "Http", Config.HostBind, Config.PortBind)
 				}
 
 				break
@@ -545,8 +543,6 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						}
 						return true
 					})
-				} else {
-					t.notifyListenerStarted(SmdConfig.Name, "SMB", "", "")
 				}
 
 				break
@@ -581,8 +577,6 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						}
 						return true
 					})
-				} else {
-					t.notifyListenerStarted(ExtConfig.Name, "External", "", "")
 				}
 
 				break
@@ -617,8 +611,6 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						}
 						return true
 					})
-				} else {
-					t.notifyListenerStarted(Config.Name, "Dns", Config.BindHost, strconv.Itoa(Config.BindPort))
 				}
 
 				break

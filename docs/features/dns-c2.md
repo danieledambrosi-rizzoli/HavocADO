@@ -107,12 +107,14 @@ returned instead of executing the task again.
 The listener dialog gains a `Dns` payload page with `Domain`, `Bind Host`,
 `Bind Port`, `Record Type` (TXT), `Encoding` (base64url) and `Frequency`.
 On edit, domain/record type/encoding/frequency are editable; bind address and
-port are read-only because they are fixed at start time. The listener package
-keys are exactly:
+port are read-only because they are fixed at start time. The DNS listener
+package carries:
 
 ```
 Name, Protocol="Dns", Domain, BindHost, BindPort, RecordType, Encoding, Frequency
 ```
+
+plus the common `Status`, `KillDate` and `WorkingHours` fields.
 
 `BindPort` and `Frequency` travel as decimal strings, matching every other
 listener package.
@@ -123,6 +125,15 @@ listener package.
 `handlers.AGENT_HTTP`/`AGENT_HTTPS`/`AGENT_PIVOT_SMB`/`AGENT_EXTERNAL`/
 `AGENT_DNS`. A mismatch makes the client fall through to the service-listener
 branch, drop the listener row and report "Listener protocol type not found".
+
+The package a newly connected client receives is the one built by
+`events.Listener.ListenerAdd`, so `Protocol` always carries the constant
+spelling and the package always carries the full DNS configuration. See
+[listener-replay.md](listener-replay.md).
+
+A secure HTTP listener is replayed with `Protocol="Http"` and
+`Secure="true"`. The client derives the HTTPS row from the `Secure` flag, so
+no separate `Protocol="Https"` package is sent.
 
 ## Profile impact
 
@@ -150,10 +161,3 @@ New optional `Dns` block under `Listeners` (`ListenerDNS` in
   teamserver handler, same as HTTP.
 - The v1 profile syntax for `BindHost`/`BindPort` is new in this change; the
   docs site has not been updated.
-- `SendAllPackagesToNewClient` sends `Protocol="Https"` for a secure HTTP
-  listener, but the client's `Listener.Add` handler only matches
-  `Protocol="Http"` and derives the HTTPS display name from the `Secure`
-  field instead. A secure HTTP listener therefore still hits the "Listener
-  protocol type not found" path when a client connects, and the replay
-  package carries no `Secure` key. Not verified against the GUI; the DNS and
-  SMB names are unaffected.

@@ -482,17 +482,3 @@ func (t *Teamserver) ListenerStartNotify(Listener map[string]any) {
 
 	logger.Info(fmt.Sprintf("Started \"%v\" listener", colors.Green(fields["Name"])))
 }
-
-// notifyListenerStarted broadcasts a successfully started listener to all
-// connected clients.
-func (t *Teamserver) notifyListenerStarted(name, protocol, host, port string) {
-	t.ListenerStartNotify(map[string]any{
-		"Name":     name,
-		"Protocol": protocol,
-		"Host":     host,
-		"Port":     port,
-		"Error":    "",
-		"Status":   "Online",
-		"Info":     "",
-	})
-}

@@ -41,6 +41,8 @@ Scope: **teamserver only**
 - Connects to `wss://<host>:<port>/havoc/` with TLS
 - Auth: SHA3-256 hex of plaintext password (matches `teamserver/pkg/packager` logic)
 - Replays `EventsList` on login: profile, listeners, active sessions
+- Listener records merge both package shapes: `HostBind`/`PortBind` first,
+  then `BindHost`/`BindPort` (DNS), then `Host`/`Port` (service listeners)
 - Maintains per-session ring buffer of output events (default ~4MB)
 - Exponential backoff reconnect (1s → 30s) unless `--no-reconnect`
 

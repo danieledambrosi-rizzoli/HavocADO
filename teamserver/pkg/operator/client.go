@@ -309,17 +309,22 @@ func (c *Client) handleListener(pkg *Package) {
 		listener.Protocol = info["Protocol"]
 		listener.Status = info["Status"]
 
-		// Handle both event formats:
+		// Listener packages come in two shapes:
 		// 1. Full format from events.Listener.ListenerAdd: Hosts, HostBind, PortBind, PortConn, Secure
 		// 2. Simplified format from ListenerStartNotify: Host, Port
+		// DNS listeners report their bind address as BindHost/BindPort.
 		if hostBind, ok := info["HostBind"]; ok {
 			listener.HostBind = hostBind
+		} else if bindHost, ok := info["BindHost"]; ok {
+			listener.HostBind = bindHost
 		} else if host, ok := info["Host"]; ok {
 			listener.HostBind = host
 		}
 
 		if portBind, ok := info["PortBind"]; ok {
 			listener.PortBind = portBind
+		} else if bindPort, ok := info["BindPort"]; ok {
+			listener.PortBind = bindPort
 		} else if port, ok := info["Port"]; ok {
 			listener.PortBind = port
 		}
