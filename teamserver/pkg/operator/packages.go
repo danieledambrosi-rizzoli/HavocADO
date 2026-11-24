@@ -59,9 +59,9 @@ const (
 	SessDead    = 5
 
 	// Gate
-	TypeGate = 0x5
-	GateStaged     = 1
-	GateStageless  = 2
+	TypeGate      = 0x5
+	GateStaged    = 1
+	GateStageless = 2
 
 	// Teamserver
 	TypeTeamserver = 0x10
@@ -204,9 +204,9 @@ func ListenerRemovePackage(user, name string) *Package {
 func GateStagelessPackage(user, agentType, listener, arch, format, config string) *Package {
 	return &Package{
 		Head: Head{
-			Event: TypeGate,
-			User:  user,
-			Time:  "",
+			Event:   TypeGate,
+			User:    user,
+			Time:    "",
 			OneTime: "true",
 		},
 		Body: Body{

@@ -3771,7 +3771,7 @@ func (a *Agent) TaskDispatch(RequestID uint32, CommandID uint32, Parser *parser.
 						a.RequestCompleted(RequestID)
 					}
 				} else {
-					logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_PROC - DEMON_COMMAND_PROC_CREATE, Invalid packet: %d", AgentID))
+					logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_PROC - DEMON_COMMAND_PROC_CREATE, Invalid packet", AgentID))
 				}
 
 				// TODO: can we expect more messages from this request?
@@ -4620,7 +4620,7 @@ func (a *Agent) TaskDispatch(RequestID uint32, CommandID uint32, Parser *parser.
 							Output["Output"] = "\n" + Buffer
 							a.RequestCompleted(RequestID)
 						} else {
-							logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_TOKEN - DEMON_COMMAND_TOKEN_FIND_TOKENS, Invalid packet: %d", AgentID))
+							logger.Debug(fmt.Sprintf("Agent: %x, Command: COMMAND_TOKEN - DEMON_COMMAND_TOKEN_FIND_TOKENS, Invalid packet", AgentID))
 						}
 					} else {
 						Output["Type"] = typeError

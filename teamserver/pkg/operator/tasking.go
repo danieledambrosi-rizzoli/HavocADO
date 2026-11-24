@@ -21,14 +21,14 @@ const (
 
 // DirOptions holds options for dir/ls command.
 type DirOptions struct {
-	Path       string
-	Recursive  bool
-	FilesOnly  bool
-	DirsOnly   bool
-	ListOnly   bool
-	Starts     string
-	Contains   string
-	Ends       string
+	Path      string
+	Recursive bool
+	FilesOnly bool
+	DirsOnly  bool
+	ListOnly  bool
+	Starts    string
+	Contains  string
+	Ends      string
 }
 
 // TaskRequest represents a task to send to an agent.
@@ -175,9 +175,9 @@ func PsTask(sessionID string) TaskRequest {
 		SessionID: sessionID,
 		CommandID: CommandProcList,
 		Info: map[string]string{
-			"DemonID":              sessionID,
-			"CommandID":            strconv.Itoa(CommandProcList),
-			"FromProcessManager":   "false",
+			"DemonID":            sessionID,
+			"CommandID":          strconv.Itoa(CommandProcList),
+			"FromProcessManager": "false",
 		},
 		CommandLine: "ps",
 	}
@@ -205,9 +205,9 @@ func SleepTask(sessionID string, delay, jitter int) TaskRequest {
 		SessionID: sessionID,
 		CommandID: CommandSleep,
 		Info: map[string]string{
-			"DemonID":    sessionID,
-			"CommandID":  strconv.Itoa(CommandSleep),
-			"Arguments":  args,
+			"DemonID":   sessionID,
+			"CommandID": strconv.Itoa(CommandSleep),
+			"Arguments": args,
 		},
 		CommandLine: fmt.Sprintf("sleep %d %d", delay, jitter),
 	}
@@ -236,10 +236,10 @@ func JobsTask(sessionID string) TaskRequest {
 		SessionID: sessionID,
 		CommandID: CommandJob,
 		Info: map[string]string{
-			"DemonID":  sessionID,
+			"DemonID":   sessionID,
 			"CommandID": strconv.Itoa(CommandJob),
-			"Command":  "list",
-			"Param":    "0",
+			"Command":   "list",
+			"Param":     "0",
 		},
 		CommandLine: "jobs",
 	}
@@ -266,9 +266,9 @@ func SendRawCommandTask(sessionID string, commandID interface{}, info map[string
 	}
 
 	return TaskRequest{
-		SessionID: sessionID,
-		CommandID: 0, // Will be parsed from info
-		Info:      info,
+		SessionID:   sessionID,
+		CommandID:   0, // Will be parsed from info
+		Info:        info,
 		CommandLine: commandLine,
 	}
 }

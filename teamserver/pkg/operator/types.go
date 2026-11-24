@@ -7,46 +7,46 @@ import (
 
 // Status represents the connection status of the operator client.
 type Status struct {
-	Connected  bool
-	User       string
-	Server     string
-	Profile    string
-	LastError  string
-	Since      time.Time
+	Connected bool
+	User      string
+	Server    string
+	Profile   string
+	LastError string
+	Since     time.Time
 }
 
 // Session represents a Havoc agent session.
 type Session struct {
-	ID            string
-	Hostname      string
-	Username      string
-	Domain        string
-	InternalIP    string
-	ExternalIP    string
-	OSVersion     string
-	OSArch        string
-	ProcessName   string
-	ProcessPath   string
-	PID           int
-	PPID          int
-	Active        bool
-	Elevated      bool
-	SleepDelay    int
-	SleepJitter   int
-	LastCallIn    string
-	FirstCallIn   string
+	ID          string
+	Hostname    string
+	Username    string
+	Domain      string
+	InternalIP  string
+	ExternalIP  string
+	OSVersion   string
+	OSArch      string
+	ProcessName string
+	ProcessPath string
+	PID         int
+	PPID        int
+	Active      bool
+	Elevated    bool
+	SleepDelay  int
+	SleepJitter int
+	LastCallIn  string
+	FirstCallIn string
 }
 
 // Listener represents a Havoc listener.
 type Listener struct {
-	Name       string
-	Protocol   string
-	Status     string
-	Hosts      string
-	HostBind   string
-	PortBind   string
-	PortConn   string
-	Secure     bool
+	Name     string
+	Protocol string
+	Status   string
+	Hosts    string
+	HostBind string
+	PortBind string
+	PortConn string
+	Secure   bool
 }
 
 // OutputEvent represents a single output event from a session.
@@ -88,13 +88,13 @@ type Payload struct {
 
 // ringBuffer is a bounded ring buffer for output events.
 type ringBuffer struct {
-	buf     []OutputEvent
-	size    int
-	head    int
-	tail    int
-	count   int
-	seq     uint64
-	mu      sync.Mutex
+	buf   []OutputEvent
+	size  int
+	head  int
+	tail  int
+	count int
+	seq   uint64
+	mu    sync.Mutex
 }
 
 func newRingBuffer(capacity int) *ringBuffer {
