@@ -57,7 +57,7 @@ build gate before declaring done.
 ⚠️ **Ask first:** destructive git (`reset --hard`, `clean -fd`, `push --force`,
 branch deletion), profile schema changes, cross-boundary contract changes.
 ❌ **Never:** commit secrets; push to main; bundle unrelated edits; suppress
-build errors or weaken types to pass the gate.
+build errors or weaken types to pass the gate; sleep to wait a tast, YOU MUST use an async function with a callback.
 
 ## Feature docs
 One front-door doc per feature under `docs/features/`, indexed in `INDEX.md`.

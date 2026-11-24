@@ -52,3 +52,6 @@ payloads/Demon/.cache/
 # pyenv / node files
 package.json
 package-lock.json
+
+# test reports
+test/report/
