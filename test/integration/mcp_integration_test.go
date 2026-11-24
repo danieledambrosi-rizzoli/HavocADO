@@ -41,18 +41,15 @@ func DefaultTestMCPConfig() TestMCPServerConfig {
 }
 
 func findHavocBinary() string {
-	// Try to find the havoc binary
-	paths := []string{
-		"/home/kali/Havoc/havoc",
-		"../../havoc",
+	// The teamserver build (make ts-build) writes ./havoc at the repository root.
+	candidates := []string{
+		filepath.Join(repoRoot, "havoc"),
 		"havoc",
 	}
 
-	for _, p := range paths {
-		if abs, err := filepath.Abs(p); err == nil {
-			if _, err := os.Stat(abs); err == nil {
-				return abs
-			}
+	for _, candidate := range candidates {
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path
 		}
 	}
 	return "havoc" // fallback to PATH
@@ -406,6 +403,49 @@ func TestMCPTeamserverStatus(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestMCPGeneratePayload tests the generate_payload tool via MCP
+func TestMCPGeneratePayload(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	cfg := DefaultTestMCPConfig()
+	if !isTeamserverReachable(cfg.TeamserverURL) {
+		t.Skip("teamserver not reachable, skipping integration test")
+	}
+
+	// Need a running listener for payload generation
+	// This test requires a teamserver with an HTTP listener named "http"
+	// For now, we just verify the tool exists and can be called
+	// A full test would require setting up a listener
+
+	cfg.ReadOnly = false // generate_payload is a tasking tool
+
+	client := StartMCPClient(t, cfg)
+	defer client.Close()
+
+	client.Initialize(t)
+
+	// List tools to verify generate_payload is available
+	toolsResult := client.ListTools(t)
+	var toolsList map[string]any
+	json.Unmarshal(toolsResult, &toolsList)
+
+	tools := toolsList["tools"].([]any)
+	toolNames := make(map[string]bool)
+	for _, tool := range tools {
+		toolNames[tool.(map[string]any)["name"].(string)] = true
+	}
+
+	if !toolNames["generate_payload"] {
+		t.Error("expected generate_payload tool to be available")
+	}
+
+	// Note: Full payload generation test requires a running listener
+	// This test verifies the tool is registered and accessible
+	t.Log("generate_payload tool is available via MCP")
 }
 
 func isTeamserverReachable(url string) bool {

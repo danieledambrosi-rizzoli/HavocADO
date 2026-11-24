@@ -8,56 +8,140 @@ import (
 	"testing"
 
 	"Havoc/pkg/common/builder"
+	"Havoc/pkg/handlers"
 	"Havoc/pkg/profile"
 	"Havoc/test/ephemeral"
 )
 
+// getProfilePath returns the absolute path of a profile in the repository's
+// profiles/ directory. TestMain has already changed into the repository root.
 func getProfilePath(t *testing.T, name string) string {
 	t.Helper()
-	repoRoot := filepath.Join("..", "..", "..")
+
 	profPath := filepath.Join(repoRoot, "profiles", name)
-	
-	if _, err := os.Stat(profPath); os.IsNotExist(err) {
-		t.Fatalf("profile not found at %s", profPath)
+	if _, err := os.Stat(profPath); err != nil {
+		t.Fatalf("profile not found at %s: %v", profPath, err)
 	}
-	
+
 	return profPath
 }
 
-// TestBeaconGeneration tests generating various beacon/payload types
+func loadProfile(t *testing.T, name string) *profile.Profile {
+	t.Helper()
+
+	prof := profile.NewProfile()
+	if err := prof.SetProfile(getProfilePath(t, name), false); err != nil {
+		t.Fatalf("failed to parse profile %s: %v", name, err)
+	}
+
+	return prof
+}
+
+// requireToolchain skips the test when the profile's compiler configuration or
+// the Demon source tree is not available on this machine.
+func requireToolchain(t *testing.T, prof *profile.Profile) builder.BuilderConfig {
+	t.Helper()
+
+	if prof.Config.Server == nil || prof.Config.Server.Build == nil {
+		t.Skip("profile has no Teamserver.Build block")
+	}
+
+	build := prof.Config.Server.Build
+	for _, compiler := range []string{build.Compiler64, build.Compiler86} {
+		if compiler == "" {
+			t.Skip("profile does not configure both compilers")
+		}
+		if _, err := exec.LookPath(compiler); err != nil {
+			t.Skipf("compiler %s not available: %v", compiler, err)
+		}
+	}
+
+	if build.Nasm == "" {
+		t.Skip("profile does not configure nasm")
+	}
+	if _, err := exec.LookPath(build.Nasm); err != nil {
+		t.Skipf("nasm %s not available: %v", build.Nasm, err)
+	}
+
+	if _, err := os.Stat(filepath.Join("payloads", "Demon")); err != nil {
+		t.Skipf("Demon source tree not available: %v", err)
+	}
+
+	return builder.BuilderConfig{
+		Compiler64: build.Compiler64,
+		Compiler86: build.Compiler86,
+		Nasm:       build.Nasm,
+		DebugDev:   false,
+		SendLogs:   false,
+	}
+}
+
+// newBuilderForTest creates a builder whose console output is routed through
+// the test log, so a failed compile shows the compiler diagnostics.
+func newBuilderForTest(t *testing.T, cfg builder.BuilderConfig) *builder.Builder {
+	t.Helper()
+
+	b := builder.NewBuilder(cfg)
+	b.SetSilent(false)
+	b.SendConsoleMessage = func(msgType, msg string) {
+		if msgType == "Error" {
+			t.Logf("builder error: %s", msg)
+		}
+	}
+
+	return b
+}
+
+func testHTTPListener() *handlers.HTTP {
+	return &handlers.HTTP{
+		Config: handlers.HTTPConfig{
+			Name:     "Test HTTP Listener",
+			HostBind: "0.0.0.0",
+			PortBind: "8080",
+			PortConn: "8080",
+			Hosts:    []string{"example.com"},
+			Secure:   false,
+		},
+	}
+}
+
+func testDemonConfig(t *testing.T) string {
+	t.Helper()
+
+	config := map[string]any{
+		"Sleep":             "2",
+		"Jitter":            "15",
+		"Sleep Technique":   "WaitForSingleObjectEx",
+		"Sleep Jmp Gadget":  "jmp rax",
+		"Stack Duplication": false,
+		"Proxy Loading":     "None (LdrLoadDll)",
+		"Amsi/Etw Patch":    "Hardware breakpoints",
+		"Injection": map[string]any{
+			"Alloc":   "Win32",
+			"Execute": "Win32",
+			"Spawn64": "C:\\Windows\\System32\\notepad.exe",
+			"Spawn32": "C:\\Windows\\SysWOW64\\notepad.exe",
+		},
+	}
+
+	configBytes, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("failed to encode test configuration: %v", err)
+	}
+
+	return string(configBytes)
+}
+
+// TestBeaconGeneration builds every supported payload format in parallel.
 func TestBeaconGeneration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping beacon generation test in short mode")
 	}
 
-	// Check if compilers are available
-	if !hasMingwCompilers() {
-		t.Skip("mingw compilers not available, skipping beacon generation test")
-	}
+	prof := loadProfile(t, "havoc.yaotl")
+	cfg := requireToolchain(t, prof)
+	config := testDemonConfig(t)
 
-	// Create ephemeral directory for payload output
-	payloadDir, cleanup := ephemeral.TempDir(t, "beacon-*")
-	defer cleanup()
-
-	// Load a test profile
-	profPath := getProfilePath(t, "havoc.yaotl")
-	prof := profile.NewProfile()
-	err := prof.SetProfile(profPath, false)
-	if err != nil {
-		t.Fatalf("failed to parse profile: %v", err)
-	}
-
-	// Get the first listener from profile - we need to access internal config
-	// For now, use a basic HTTP listener config
-	listenerConfig := map[string]any{
-		"HostBind": "0.0.0.0",
-		"PortBind": "8080",
-		"PortConn": "8080",
-		"Hosts":    []string{"example.com"},
-		"Secure":   false,
-	}
-
-	// Test different payload formats
 	payloadTests := []struct {
 		name       string
 		fileType   int
@@ -73,46 +157,26 @@ func TestBeaconGeneration(t *testing.T) {
 	}
 
 	for _, tc := range payloadTests {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := builder.BuilderConfig{
-				Compiler64: prof.Config.Server.Build.Compiler64,
-				Compiler86: prof.Config.Server.Build.Compiler86,
-				Nasm:       prof.Config.Server.Build.Nasm,
-				DebugDev:   false,
-				SendLogs:   false,
-			}
+			t.Parallel()
 
-			b := builder.NewBuilder(cfg)
-			b.SetSilent(true)
+			payloadDir, _ := ephemeral.TempDir(t, "beacon-*")
+
+			b := newBuilderForTest(t, cfg)
 			b.SetArch(tc.arch)
 			b.SetFormat(tc.fileType)
 			b.SetExtension(tc.extension)
-			b.SetListener(0, listenerConfig) // 0 = HTTP listener type
+			b.SetListener(handlers.LISTENER_HTTP, testHTTPListener())
 
-			// Minimal config
-			config := map[string]any{
-				"Sleep":            "2",
-				"Jitter":           "15",
-				"Sleep Technique":  "WaitForSingleObjectEx",
-				"Sleep Jmp Gadget": "jmp rax",
-				"Stack Duplication": false,
-				"Proxy Loading":    "None (LdrLoadDll)",
-				"Amsi/Etw Patch":   "Hardware breakpoints",
-				"Injection": map[string]any{
-					"Alloc":   "Win32",
-					"Execute": "Win32",
-					"Spawn64": "C:\\Windows\\System32\\notepad.exe",
-					"Spawn32": "C:\\Windows\\SysWOW64\\notepad.exe",
-				},
+			if err := b.SetConfig(config); err != nil {
+				t.Fatalf("failed to set config: %v", err)
 			}
-			configBytes, _ := json.Marshal(config)
-			b.SetConfig(string(configBytes))
 
 			outputPath := filepath.Join(payloadDir, "beacon"+tc.extension)
 			b.SetOutputPath(outputPath)
 
-			success := b.Build()
-			if !success {
+			if !b.Build() {
 				t.Fatalf("build failed for %s", tc.name)
 			}
 
@@ -125,86 +189,50 @@ func TestBeaconGeneration(t *testing.T) {
 				t.Errorf("payload too small for %s: got %d bytes, expected at least %d", tc.name, len(payload), tc.expectSize)
 			}
 
-			t.Logf("%s: generated %d bytes", tc.name, len(payload))
-
-			// Verify file was created
-			if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-				t.Errorf("output file not created at %s", outputPath)
+			// Shellcode builds return the bytes through GetPayloadBytes and
+			// never write them to outputPath; every other format does.
+			if tc.fileType != builder.FILETYPE_WINDOWS_RAW_BINARY {
+				if _, err := os.Stat(outputPath); err != nil {
+					t.Errorf("output file not created at %s: %v", outputPath, err)
+				}
 			}
 
-			// Clean up
+			t.Logf("%s: generated %d bytes", tc.name, len(payload))
 			b.DeletePayload()
 		})
 	}
 }
 
-// TestBeaconGenerationWithProfilePatch tests payload generation with profile patching
+// TestBeaconGenerationWithProfilePatch tests payload generation with profile patching.
 func TestBeaconGenerationWithProfilePatch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping beacon generation test in short mode")
 	}
 
-	if !hasMingwCompilers() {
-		t.Skip("mingw compilers not available, skipping beacon generation test")
-	}
+	prof := loadProfile(t, "havoc.yaotl")
+	cfg := requireToolchain(t, prof)
+	config := testDemonConfig(t)
 
-	payloadDir, cleanup := ephemeral.TempDir(t, "beacon-patch-*")
-	defer cleanup()
+	payloadDir, _ := ephemeral.TempDir(t, "beacon-patch-*")
 
-	profPath := getProfilePath(t, "havoc.yaotl")
-	prof := profile.NewProfile()
-	err := prof.SetProfile(profPath, false)
-	if err != nil {
-		t.Fatalf("failed to parse profile: %v", err)
-	}
-
-	listenerConfig := map[string]any{
-		"HostBind": "0.0.0.0",
-		"PortBind": "8080",
-		"PortConn": "8080",
-		"Hosts":    []string{"example.com"},
-		"Secure":   false,
-	}
-
-	cfg := builder.BuilderConfig{
-		Compiler64: prof.Config.Server.Build.Compiler64,
-		Compiler86: prof.Config.Server.Build.Compiler86,
-		Nasm:       prof.Config.Server.Build.Nasm,
-		DebugDev:   false,
-		SendLogs:   false,
-	}
-
-	b := builder.NewBuilder(cfg)
-	b.SetSilent(true)
+	b := newBuilderForTest(t, cfg)
 	b.SetArch(builder.ARCHITECTURE_X64)
 	b.SetFormat(builder.FILETYPE_WINDOWS_EXE)
 	b.SetExtension(".exe")
-	b.SetListener(0, listenerConfig)
-	b.SetPatchConfig(prof.Config.Demon.Binary)
+	b.SetListener(handlers.LISTENER_HTTP, testHTTPListener())
 
-	config := map[string]any{
-		"Sleep":            "2",
-		"Jitter":           "15",
-		"Sleep Technique":  "WaitForSingleObjectEx",
-		"Sleep Jmp Gadget": "jmp rax",
-		"Stack Duplication": false,
-		"Proxy Loading":    "None (LdrLoadDll)",
-		"Amsi/Etw Patch":   "Hardware breakpoints",
-		"Injection": map[string]any{
-			"Alloc":   "Win32",
-			"Execute": "Win32",
-			"Spawn64": "C:\\Windows\\System32\\notepad.exe",
-			"Spawn32": "C:\\Windows\\SysWOW64\\notepad.exe",
-		},
+	if prof.Config.Demon != nil && prof.Config.Demon.Binary != nil {
+		b.SetPatchConfig(prof.Config.Demon.Binary)
 	}
-	configBytes, _ := json.Marshal(config)
-	b.SetConfig(string(configBytes))
+
+	if err := b.SetConfig(config); err != nil {
+		t.Fatalf("failed to set config: %v", err)
+	}
 
 	outputPath := filepath.Join(payloadDir, "patched_beacon.exe")
 	b.SetOutputPath(outputPath)
 
-	success := b.Build()
-	if !success {
+	if !b.Build() {
 		t.Fatal("build failed")
 	}
 
@@ -213,32 +241,13 @@ func TestBeaconGenerationWithProfilePatch(t *testing.T) {
 		t.Fatal("no payload generated")
 	}
 
-	t.Logf("Patched beacon generated: %d bytes", len(payload))
-
-	// Verify patch was applied - check for custom strings if any
-	if prof.Config.Demon.Binary != nil && prof.Config.Demon.Binary.ReplaceStringsX64 != nil {
+	if prof.Config.Demon != nil && prof.Config.Demon.Binary != nil && prof.Config.Demon.Binary.ReplaceStringsX64 != nil {
 		for oldStr := range prof.Config.Demon.Binary.ReplaceStringsX64 {
-			// The patch should have replaced the string
+			// The patch should have replaced the string.
 			t.Logf("Profile patch applied for: %s", oldStr)
 		}
 	}
 
+	t.Logf("Patched beacon generated: %d bytes", len(payload))
 	b.DeletePayload()
-}
-
-func hasMingwCompilers() bool {
-	// Check if x86_64-w64-mingw32-gcc is available
-	paths := []string{
-		"/usr/bin/x86_64-w64-mingw32-gcc",
-		"/usr/bin/i686-w64-mingw32-gcc",
-		"x86_64-w64-mingw32-gcc",
-		"i686-w64-mingw32-gcc",
-	}
-
-	for _, p := range paths {
-		if _, err := exec.LookPath(p); err == nil {
-			return true
-		}
-	}
-	return false
 }

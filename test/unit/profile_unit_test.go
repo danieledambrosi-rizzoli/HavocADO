@@ -10,8 +10,8 @@ import (
 
 func getProfilePath(t *testing.T, name string) string {
 	t.Helper()
-	// Get the repo root by going up from the test directory
-	repoRoot := filepath.Join("..", "..", "..")
+	// test/unit is two levels below the repository root
+	repoRoot := filepath.Join("..", "..")
 	profPath := filepath.Join(repoRoot, "profiles", name)
 	
 	// Verify file exists
