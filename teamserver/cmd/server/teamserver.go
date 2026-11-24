@@ -914,7 +914,7 @@ func (t *Teamserver) SendAllPackagesToNewClient(ClientID string) {
 			_ = listener.Config.(*handlers.SMB)
 			pk.Body.Info = map[string]any{
 				"Name":     listener.Name,
-				"Protocol": "SMB",
+				"Protocol": "Smb",
 				"Host":     "",
 				"Port":     "",
 				"Error":    "",
@@ -936,7 +936,7 @@ func (t *Teamserver) SendAllPackagesToNewClient(ClientID string) {
 			dnsConfig := listener.Config.(*handlers.DNS)
 			pk.Body.Info = map[string]any{
 				"Name":     listener.Name,
-				"Protocol": "DNS",
+				"Protocol": "Dns",
 				"Host":     dnsConfig.Config.BindHost,
 				"Port":     strconv.Itoa(dnsConfig.Config.BindPort),
 				"Error":    "",

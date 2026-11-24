@@ -511,7 +511,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						return true
 					})
 				} else {
-					t.notifyListenerStarted(Config.Name, "HTTP", Config.HostBind, Config.PortBind)
+					t.notifyListenerStarted(Config.Name, "Http", Config.HostBind, Config.PortBind)
 				}
 
 				break
@@ -618,7 +618,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						return true
 					})
 				} else {
-					t.notifyListenerStarted(Config.Name, "DNS", Config.BindHost, strconv.Itoa(Config.BindPort))
+					t.notifyListenerStarted(Config.Name, "Dns", Config.BindHost, strconv.Itoa(Config.BindPort))
 				}
 
 				break
