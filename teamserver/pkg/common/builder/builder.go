@@ -2,6 +2,7 @@ package builder
 
 import (
 	"bytes"
+	"context"
 	//"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"Havoc/pkg/common"
 	"Havoc/pkg/common/packer"
@@ -140,6 +142,10 @@ type Builder struct {
 
 func NewBuilder(config BuilderConfig) *Builder {
 	var builder = new(Builder)
+
+	// Callers that run the builder without a UI (tests, MCP) must not panic
+	// when the builder reports progress. A real caller overwrites this.
+	builder.SendConsoleMessage = func(string, string) {}
 
 	builder.sourcePath = utils.GetTeamserverPath() + "/" + PayloadDir + "/Demon"
 	builder.config.Arch = ARCHITECTURE_X64
@@ -614,20 +620,18 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 	}
 
 	if b.FileType == FILETYPE_WINDOWS_SERVICE_EXE {
-		if val, ok := b.config.Config["Service Name"].(string); ok {
-			if len(val) > 0 {
-				b.compilerOptions.Defines = append(b.compilerOptions.Defines, "SERVICE_NAME=\\\""+val+"\\\"")
-				if !b.silent {
-					b.SendConsoleMessage("Info", "set service name to "+val)
-				}
-			} else {
-				val = common.RandomString(6)
-				b.compilerOptions.Defines = append(b.compilerOptions.Defines, "SERVICE_NAME=\\\""+val+"\\\"")
-				if !b.silent {
-					b.SendConsoleMessage("Info", "service name not specified... using random name")
-					b.SendConsoleMessage("Info", "set service name to "+val)
-				}
+		// SERVICE_NAME is required by src/main/MainSvc.c. Callers that do not
+		// provide one (MCP, tests) still get a buildable payload.
+		val, _ := b.config.Config["Service Name"].(string)
+		if len(val) == 0 {
+			val = common.RandomString(6)
+			if !b.silent {
+				b.SendConsoleMessage("Info", "service name not specified... using random name")
 			}
+		}
+		b.compilerOptions.Defines = append(b.compilerOptions.Defines, "SERVICE_NAME=\\\""+val+"\\\"")
+		if !b.silent {
+			b.SendConsoleMessage("Info", "set service name to "+val)
 		}
 	}
 
@@ -1082,19 +1086,27 @@ func (b *Builder) GetPayloadBytes() []byte {
 	return FileBuffer
 }
 
+// buildCommandTimeout bounds a single compiler or assembler invocation so a
+// wedged toolchain cannot block payload generation forever.
+const buildCommandTimeout = 5 * time.Minute
+
 func (b *Builder) Cmd(cmd string) bool {
 	var (
-		Command = exec.Command("sh", "-c", cmd)
-		stdout  bytes.Buffer
-		stderr  bytes.Buffer
-		err     error
+		stdout bytes.Buffer
+		stderr bytes.Buffer
 	)
 
+	ctx, cancel := context.WithTimeout(context.Background(), buildCommandTimeout)
+	defer cancel()
+
+	Command := exec.CommandContext(ctx, "sh", "-c", cmd)
 	Command.Dir = b.sourcePath
 	Command.Stdout = &stdout
 	Command.Stderr = &stderr
+	// Give Wait a bounded amount of time to drain output after a kill.
+	Command.WaitDelay = 5 * time.Second
 
-	err = Command.Run()
+	err := Command.Run()
 	if err != nil {
 		logger.Error("Couldn't compile implant: " + err.Error())
 		if !b.silent {
