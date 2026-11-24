@@ -511,16 +511,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						return true
 					})
 				} else {
-					// Notify all clients about the new listener
-					t.ListenerStartNotify(map[string]any{
-						"Name":     pk.Body.Info["Name"].(string),
-						"Protocol": "HTTP",
-						"Host":     Config.HostBind,
-						"Port":     Config.PortBind,
-						"Error":    "",
-						"Status":   "Online",
-						"Info":     "",
-					})
+					t.notifyListenerStarted(Config.Name, "HTTP", Config.HostBind, Config.PortBind)
 				}
 
 				break
@@ -538,7 +529,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 				SmdConfig.PipeName, found = pk.Body.Info["PipeName"].(string)
 				if !found {
-					SmdConfig.Name = ""
+					SmdConfig.PipeName = ""
 				}
 
 				if err := t.ListenerStart(handlers.LISTENER_PIVOT_SMB, SmdConfig); err != nil {
@@ -555,15 +546,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						return true
 					})
 				} else {
-					t.ListenerStartNotify(map[string]any{
-						"Name":     pk.Body.Info["Name"].(string),
-						"Protocol": "SMB",
-						"Host":     "",
-						"Port":     "",
-						"Error":    "",
-						"Status":   "Online",
-						"Info":     "",
-					})
+					t.notifyListenerStarted(SmdConfig.Name, "SMB", "", "")
 				}
 
 				break
@@ -599,15 +582,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						return true
 					})
 				} else {
-					t.ListenerStartNotify(map[string]any{
-						"Name":     pk.Body.Info["Name"].(string),
-						"Protocol": "External",
-						"Host":     "",
-						"Port":     "",
-						"Error":    "",
-						"Status":   "Online",
-						"Info":     "",
-					})
+					t.notifyListenerStarted(ExtConfig.Name, "External", "", "")
 				}
 
 				break
@@ -643,15 +618,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						return true
 					})
 				} else {
-					t.ListenerStartNotify(map[string]any{
-						"Name":     Config.Name,
-						"Protocol": "DNS",
-						"Host":     Config.BindHost,
-						"Port":     strconv.Itoa(Config.BindPort),
-						"Error":    "",
-						"Status":   "Online",
-						"Info":     "",
-					})
+					t.notifyListenerStarted(Config.Name, "DNS", Config.BindHost, strconv.Itoa(Config.BindPort))
 				}
 
 				break
@@ -910,11 +877,6 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 		switch pk.Body.SubEvent {
 		case packager.Type.Gate.Stageless:
 			var (
-				AgentType      = pk.Body.Info["AgentType"].(string)
-				ListenerName   = pk.Body.Info["Listener"].(string)
-				Arch           = pk.Body.Info["Arch"].(string)
-				Format         = pk.Body.Info["Format"].(string)
-				Config         = pk.Body.Info["Config"].(string)
 				SendConsoleMsg func(MsgType, Message string)
 				ClientID       string
 			)
@@ -936,6 +898,18 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 				}
 			}
 
+			AgentType, _ := pk.Body.Info["AgentType"].(string)
+			ListenerName, _ := pk.Body.Info["Listener"].(string)
+			Arch, _ := pk.Body.Info["Arch"].(string)
+			Format, _ := pk.Body.Info["Format"].(string)
+			Config, _ := pk.Body.Info["Config"].(string)
+
+			if AgentType == "" || ListenerName == "" || Arch == "" || Format == "" {
+				logger.Error("Gate.Stageless request is missing required fields")
+				SendConsoleMsg("Error", "payload generation request is missing agent_type, listener, arch or format")
+				return
+			}
+
 			if AgentType == "Demon" {
 				go func() {
 					var ConfigMap = make(map[string]any)
@@ -943,6 +917,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 					err := json.Unmarshal([]byte(Config), &ConfigMap)
 					if err != nil {
 						logger.Error("Failed to Unmarshal json to object: " + err.Error())
+						SendConsoleMsg("Error", "failed to parse payload configuration: "+err.Error())
 						return
 					}
 
@@ -965,6 +940,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 					err = PayloadBuilder.SetConfig(Config)
 					if err != nil {
+						SendConsoleMsg("Error", "failed to set payload configuration: "+err.Error())
 						return
 					}
 
@@ -998,13 +974,23 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						Ext += ".bin"
 					} else {
 						logger.Error("Unknown Format: " + Format)
+						SendConsoleMsg("Error", "unknown payload format: "+Format)
 						return
 					}
 
+					ListenerFound := false
 					for i := 0; i < len(t.Listeners); i++ {
 						if t.Listeners[i].Name == ListenerName {
 							PayloadBuilder.SetListener(t.Listeners[i].Type, t.Listeners[i].Config)
+							ListenerFound = true
+							break
 						}
+					}
+
+					if !ListenerFound {
+						logger.Error("Listener not found: " + ListenerName)
+						SendConsoleMsg("Error", "listener not found: "+ListenerName)
+						return
 					}
 
 					PayloadBuilder.SetExtension(Ext)
@@ -1027,14 +1013,17 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 				}()
 			} else {
 				// send to Services
+				AgentFound := false
 				for _, Agent := range t.Service.Agents {
 					if Agent.Name == AgentType {
+						AgentFound = true
+
 						var ConfigMap = make(map[string]any)
 
 						err := json.Unmarshal([]byte(Config), &ConfigMap)
 						if err != nil {
 							logger.Error("Failed to Unmarshal json to object: " + err.Error())
-							SendConsoleMsg("Error", "Failed to Unmarshal json to object: "+err.Error())
+							SendConsoleMsg("Error", "failed to parse payload configuration: "+err.Error())
 							return
 						}
 
@@ -1045,9 +1034,14 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 						}
 
 						Agent.SendAgentBuildRequest(ClientID, ConfigMap, Options)
+						break
 					}
 				}
 
+				if !AgentFound {
+					logger.Error("Agent type not found: " + AgentType)
+					SendConsoleMsg("Error", "agent type not found: "+AgentType)
+				}
 			}
 		}
 	}

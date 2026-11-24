@@ -20,16 +20,16 @@ var CobraMcp = &cobra.Command{
 }
 
 type McpFlags struct {
-	Teamserver    string
-	User          string
-	Password      string
-	TLSCA         string
-	Insecure      bool
-	ReadOnly      bool
-	AllowTools    string
-	AuditLog      string
+	Teamserver     string
+	User           string
+	Password       string
+	TLSCA          string
+	Insecure       bool
+	ReadOnly       bool
+	AllowTools     string
+	AuditLog       string
 	MaxOutputBytes int
-	NoReconnect   bool
+	NoReconnect    bool
 }
 
 var mcpFlags McpFlags
@@ -56,6 +56,20 @@ func mcpFunc(cmd *cobra.Command, args []string) error {
 	// Redirect logger to stderr before anything else
 	logger.SetStdOut(os.Stderr)
 
+	// Apply environment fallbacks for flags that were not set explicitly.
+	applyEnv := func(flag, env string, target *string) {
+		if cmd.Flags().Changed(flag) {
+			return
+		}
+		if value := os.Getenv(env); value != "" {
+			*target = value
+		}
+	}
+	applyEnv("teamserver", "HAVOC_MCP_TEAMSERVER", &mcpFlags.Teamserver)
+	applyEnv("user", "HAVOC_MCP_USER", &mcpFlags.User)
+	applyEnv("password", "HAVOC_MCP_PASSWORD", &mcpFlags.Password)
+	applyEnv("tls-ca", "HAVOC_MCP_TLS_CA", &mcpFlags.TLSCA)
+
 	// Validate required flags
 	if mcpFlags.Password == "" {
 		return fmt.Errorf("password is required (--password or HAVOC_MCP_PASSWORD)")
@@ -74,12 +88,12 @@ func mcpFunc(cmd *cobra.Command, args []string) error {
 
 	// Create operator config
 	opCfg := operator.Config{
-		URL:          mcpFlags.Teamserver,
-		User:         mcpFlags.User,
-		Password:     mcpFlags.Password,
-		Insecure:     mcpFlags.Insecure,
-		TLSCA:        mcpFlags.TLSCA,
-		NoReconnect:  mcpFlags.NoReconnect,
+		URL:         mcpFlags.Teamserver,
+		User:        mcpFlags.User,
+		Password:    mcpFlags.Password,
+		Insecure:    mcpFlags.Insecure,
+		TLSCA:       mcpFlags.TLSCA,
+		NoReconnect: mcpFlags.NoReconnect,
 	}
 
 	// Create MCP config

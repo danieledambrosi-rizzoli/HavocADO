@@ -444,90 +444,55 @@ func (t *Teamserver) ListenerServiceExc2Add(Name, ExEndpoint string, client *ser
 // ListenerStartNotify
 // Notifies the clients of a new listener that is available to use.
 func (t *Teamserver) ListenerStartNotify(Listener map[string]any) {
-	var (
-		ListenerName   string
-		ListenerProt   string
-		ListenerHost   string
-		ListenerPort   string
-		ListenerErro   string
-		ListenerStatus string
-		ListenerInfo   string
+	var pk = packager.Package{
+		Head: packager.Head{
+			Event: packager.Type.Listener.Type,
+		},
 
-		pk = packager.Package{
-			Head: packager.Head{
-				Event: packager.Type.Listener.Type,
-			},
-
-			Body: packager.Body{
-				SubEvent: packager.Type.Listener.Add,
-			},
-		}
-	)
+		Body: packager.Body{
+			SubEvent: packager.Type.Listener.Add,
+		},
+	}
 
 	logger.Debug(Listener)
 
-	if val, ok := Listener["Name"]; ok {
-		ListenerName = val.(string)
-	} else {
-		logger.DebugError("Listener map doesn't contain Name")
-		return
-	}
-
-	if val, ok := Listener["Protocol"]; ok {
-		ListenerProt = val.(string)
-	} else {
-		logger.DebugError("Listener map doesn't contain Protocol")
-		return
-	}
-
-	if val, ok := Listener["Host"]; ok {
-		ListenerHost = val.(string)
-	} else {
-		logger.DebugError("Listener map doesn't contain Host")
-		return
-	}
-
-	if val, ok := Listener["Port"]; ok {
-		ListenerPort = val.(string)
-	} else {
-		logger.DebugError("Listener map doesn't contain Port")
-		return
-	}
-
-	if val, ok := Listener["Error"]; ok {
-		ListenerErro = val.(string)
-	} else {
-		logger.DebugError("Listener map doesn't contain Error")
-		return
-	}
-
-	if val, ok := Listener["Status"]; ok {
-		ListenerStatus = val.(string)
-	} else {
-		logger.DebugError("Listener map doesn't contain Status")
-		return
-	}
-
-	if val, ok := Listener["Info"]; ok {
-		ListenerInfo = val.(string)
-	} else {
-		logger.DebugError("Listener map doesn't contain Info")
-		return
+	fields := make(map[string]string, 7)
+	for _, key := range []string{"Name", "Protocol", "Host", "Port", "Error", "Status", "Info"} {
+		value, ok := Listener[key].(string)
+		if !ok {
+			logger.DebugError("Listener map doesn't contain a string " + key)
+			return
+		}
+		fields[key] = value
 	}
 
 	pk.Head.Time = time.Now().Format("02/01/2006 15:04:05")
 	pk.Body.Info = map[string]any{
-		"Name":     ListenerName,
-		"Protocol": ListenerProt,
-		"Host":     ListenerHost,
-		"Port":     ListenerPort,
-		"Error":    ListenerErro,
-		"Status":   ListenerStatus,
-		"Info":     ListenerInfo,
+		"Name":     fields["Name"],
+		"Protocol": fields["Protocol"],
+		"Host":     fields["Host"],
+		"Port":     fields["Port"],
+		"Error":    fields["Error"],
+		"Status":   fields["Status"],
+		"Info":     fields["Info"],
 	}
 
 	t.EventAppend(pk)
 	t.EventBroadcast("", pk)
 
-	logger.Info(fmt.Sprintf("Started \"%v\" listener", colors.Green(ListenerName)))
+	logger.Info(fmt.Sprintf("Started \"%v\" listener", colors.Green(fields["Name"])))
+}
+
+// notifyListenerStarted broadcasts a successfully started listener to all
+// connected clients.
+func (t *Teamserver) notifyListenerStarted(name, protocol, host, port string) {
+	t.ListenerStartNotify(map[string]any{
+		"Name":     name,
+		"Protocol": protocol,
+		"Host":     host,
+		"Port":     port,
+		"Error":    "",
+		"Status":   "Online",
+		"Info":     "",
+	})
 }

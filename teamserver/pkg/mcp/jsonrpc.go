@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"Havoc/pkg/handlers"
 	"Havoc/pkg/operator"
 )
 
@@ -57,10 +58,10 @@ type Notification struct {
 
 // Tool represents an MCP tool.
 type Tool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"inputSchema"`
-	ReadOnly    bool            `json:"-"`
+	Name        string                                                       `json:"name"`
+	Description string                                                       `json:"description"`
+	InputSchema json.RawMessage                                              `json:"inputSchema"`
+	ReadOnly    bool                                                         `json:"-"`
 	Handler     func(ctx context.Context, args json.RawMessage) (any, error) `json:"-"`
 }
 
@@ -93,7 +94,7 @@ func (s *Server) registerTools() {
 		Name:        "teamserver_status",
 		Description: "Get teamserver connection status and profile info",
 		InputSchema: mustMarshal(map[string]any{
-			"type": "object",
+			"type":       "object",
 			"properties": map[string]any{},
 		}),
 		ReadOnly: true,
@@ -104,7 +105,7 @@ func (s *Server) registerTools() {
 		Name:        "list_sessions",
 		Description: "List all active agent sessions",
 		InputSchema: mustMarshal(map[string]any{
-			"type": "object",
+			"type":       "object",
 			"properties": map[string]any{},
 		}),
 		ReadOnly: true,
@@ -129,7 +130,7 @@ func (s *Server) registerTools() {
 		Name:        "list_listeners",
 		Description: "List all listeners",
 		InputSchema: mustMarshal(map[string]any{
-			"type": "object",
+			"type":       "object",
 			"properties": map[string]any{},
 		}),
 		ReadOnly: true,
@@ -178,9 +179,9 @@ func (s *Server) registerTools() {
 		InputSchema: mustMarshal(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"session_id": map[string]any{"type": "string"},
-				"command_id": map[string]any{"type": "string"},
-				"info":       map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+				"session_id":   map[string]any{"type": "string"},
+				"command_id":   map[string]any{"type": "string"},
+				"info":         map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
 				"command_line": map[string]any{"type": "string"},
 			},
 			"required": []string{"session_id", "command_id", "info"},
@@ -195,8 +196,8 @@ func (s *Server) registerTools() {
 		InputSchema: mustMarshal(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"session_id":    map[string]any{"type": "string"},
-				"cursor":        map[string]any{"type": "integer", "minimum": 0},
+				"session_id":      map[string]any{"type": "string"},
+				"cursor":          map[string]any{"type": "integer", "minimum": 0},
 				"timeout_seconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 60},
 			},
 			"required": []string{"session_id", "cursor"},
@@ -410,7 +411,9 @@ func (s *Server) closeAuditLog() {
 	defer s.auditLogMu.Unlock()
 
 	if s.auditLog != nil {
-		s.auditLog.Close()
+		if err := s.auditLog.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "mcp: failed to close audit log: %v\n", err)
+		}
 		s.auditLog = nil
 	}
 }
@@ -448,7 +451,9 @@ func (s *Server) handleInitialize(req *Request) *Response {
 	}
 
 	if req.Params != nil {
-		json.Unmarshal(req.Params, &params)
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return s.errorResponse(req.ID, InvalidParams, "Invalid parameters", err.Error())
+		}
 	}
 
 	// Accept known protocol versions
@@ -527,14 +532,21 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 	// Audit log - tool call success
 	s.auditToolCall(params.Name, params.Arguments, "success", "")
 
-	// Format result as MCP tool result
+	// Format result as MCP tool result. The text content must be the JSON
+	// representation of the result, not Go's %v map syntax.
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		s.auditToolCall(params.Name, params.Arguments, "error", "failed to encode result: "+err.Error())
+		return s.errorResponse(req.ID, InternalError, "Failed to encode tool result", err.Error())
+	}
+
 	content := []map[string]any{
-		{"type": "text", "text": fmt.Sprintf("%v", result)},
+		{"type": "text", "text": string(encoded)},
 	}
 
 	return s.successResponse(req.ID, map[string]any{
-		"content":  content,
-		"isError":  false,
+		"content": content,
+		"isError": false,
 	})
 }
 
@@ -543,7 +555,10 @@ func (s *Server) handlePing(req *Request) *Response {
 }
 
 func (s *Server) successResponse(id json.RawMessage, result any) *Response {
-	data, _ := json.Marshal(result)
+	data, err := json.Marshal(result)
+	if err != nil {
+		return s.errorResponse(id, InternalError, "Failed to encode response", err.Error())
+	}
 	return &Response{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -566,7 +581,9 @@ func (s *Server) errorResponse(id json.RawMessage, code int, message string, dat
 
 func (s *Server) writeError(enc *json.Encoder, id json.RawMessage, code int, message string, data any) {
 	resp := s.errorResponse(id, code, message, data)
-	enc.Encode(resp)
+	if err := enc.Encode(resp); err != nil {
+		fmt.Fprintf(os.Stderr, "mcp: failed to write error response: %v\n", err)
+	}
 }
 
 func (s *Server) auditToolCall(name string, args json.RawMessage, status, errorMsg string) {
@@ -594,7 +611,9 @@ func (s *Server) auditToolCall(name string, args json.RawMessage, status, errorM
 	if s.cfg.AuditLog != "" && s.cfg.AuditLog != "stderr" {
 		s.auditLogMu.Lock()
 		if s.auditLog != nil {
-			s.auditLog.WriteString(entry)
+			if _, err := s.auditLog.WriteString(entry); err != nil {
+				fmt.Fprintf(os.Stderr, "mcp: failed to write audit log: %v\n", err)
+			}
 		}
 		s.auditLogMu.Unlock()
 	}
@@ -729,14 +748,14 @@ func (s *Server) handleListListeners(ctx context.Context, args json.RawMessage) 
 	result := make([]map[string]any, len(listeners))
 	for i, l := range listeners {
 		result[i] = map[string]any{
-			"name":       l.Name,
-			"protocol":   l.Protocol,
-			"status":     l.Status,
-			"hosts":      l.Hosts,
-			"host_bind":  l.HostBind,
-			"port_bind":  l.PortBind,
-			"port_conn":  l.PortConn,
-			"secure":     l.Secure,
+			"name":      l.Name,
+			"protocol":  l.Protocol,
+			"status":    l.Status,
+			"hosts":     l.Hosts,
+			"host_bind": l.HostBind,
+			"port_bind": l.PortBind,
+			"port_conn": l.PortConn,
+			"secure":    l.Secure,
 		}
 	}
 	return map[string]any{"listeners": result}, nil
@@ -752,7 +771,7 @@ func (s *Server) handleGetOutput(ctx context.Context, args json.RawMessage) (any
 		return nil, err
 	}
 
-	if params.MaxBytes == 0 {
+	if params.MaxBytes <= 0 {
 		params.MaxBytes = s.cfg.MaxOutputBytes
 	}
 	if params.MaxBytes > 1048576 {
@@ -781,15 +800,15 @@ func (s *Server) handleGetOutput(ctx context.Context, args json.RawMessage) (any
 
 func (s *Server) handleWaitForOutput(ctx context.Context, args json.RawMessage) (any, error) {
 	var params struct {
-		SessionID     string `json:"session_id"`
-		Cursor        uint64 `json:"cursor"`
-		TimeoutSeconds int   `json:"timeout_seconds"`
+		SessionID      string `json:"session_id"`
+		Cursor         uint64 `json:"cursor"`
+		TimeoutSeconds int    `json:"timeout_seconds"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return nil, err
 	}
 
-	if params.TimeoutSeconds == 0 {
+	if params.TimeoutSeconds <= 0 {
 		params.TimeoutSeconds = 30
 	}
 	if params.TimeoutSeconds > 60 {
@@ -930,10 +949,10 @@ func (s *Server) handleSendCommand(ctx context.Context, args json.RawMessage) (a
 
 func (s *Server) handleSendRawCommand(ctx context.Context, args json.RawMessage) (any, error) {
 	var params struct {
-		SessionID   string         `json:"session_id"`
-		CommandID   json.RawMessage `json:"command_id"`
+		SessionID   string            `json:"session_id"`
+		CommandID   json.RawMessage   `json:"command_id"`
 		Info        map[string]string `json:"info"`
-		CommandLine string         `json:"command_line"`
+		CommandLine string            `json:"command_line"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return nil, err
@@ -993,6 +1012,28 @@ func getInt(m map[string]any, key string) int {
 
 // Listener management handlers (Phase 4)
 
+// stringifyConfig flattens a JSON object into the string map expected by the
+// teamserver dispatcher. Array values are joined with ", " because the
+// dispatcher splits Hosts, Headers and Uris on that separator.
+func stringifyConfig(config map[string]any) map[string]string {
+	info := make(map[string]string, len(config))
+	for key, value := range config {
+		switch v := value.(type) {
+		case []any:
+			parts := make([]string, len(v))
+			for i, item := range v {
+				parts[i] = fmt.Sprintf("%v", item)
+			}
+			info[key] = strings.Join(parts, ", ")
+		case []string:
+			info[key] = strings.Join(v, ", ")
+		default:
+			info[key] = fmt.Sprintf("%v", value)
+		}
+	}
+	return info
+}
+
 func (s *Server) handleStartListener(ctx context.Context, args json.RawMessage) (any, error) {
 	var params struct {
 		Name     string         `json:"name"`
@@ -1003,26 +1044,26 @@ func (s *Server) handleStartListener(ctx context.Context, args json.RawMessage) 
 		return nil, err
 	}
 
-	// Convert config to string map
-	info := make(map[string]string)
-	for k, v := range params.Config {
-		info[k] = fmt.Sprintf("%v", v)
+	if params.Name == "" {
+		return nil, fmt.Errorf("name is required")
 	}
 
-	// Map protocol to teamserver protocol
-	protocol := params.Protocol
-	switch protocol {
+	// Map the MCP protocol name to the value the teamserver dispatcher expects.
+	var protocol string
+	switch strings.ToLower(params.Protocol) {
 	case "http":
-		protocol = "HTTP"
+		protocol = handlers.AGENT_HTTP
 	case "https":
-		protocol = "HTTPS"
+		protocol = handlers.AGENT_HTTPS
 	case "smb":
-		protocol = "SMB"
+		protocol = handlers.AGENT_PIVOT_SMB
 	case "external":
-		protocol = "External"
+		protocol = handlers.AGENT_EXTERNAL
+	default:
+		return nil, fmt.Errorf("unsupported protocol: %s", params.Protocol)
 	}
 
-	if err := s.opClient.StartListener(params.Name, protocol, info); err != nil {
+	if err := s.opClient.StartListener(params.Name, protocol, stringifyConfig(params.Config)); err != nil {
 		return nil, fmt.Errorf("start listener: %w", err)
 	}
 
@@ -1042,12 +1083,7 @@ func (s *Server) handleEditListener(ctx context.Context, args json.RawMessage) (
 		return nil, err
 	}
 
-	info := make(map[string]string)
-	for k, v := range params.Config {
-		info[k] = fmt.Sprintf("%v", v)
-	}
-
-	if err := s.opClient.EditListener(params.Name, info); err != nil {
+	if err := s.opClient.EditListener(params.Name, stringifyConfig(params.Config)); err != nil {
 		return nil, fmt.Errorf("edit listener: %w", err)
 	}
 

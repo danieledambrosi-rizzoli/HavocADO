@@ -15,11 +15,11 @@ import (
 )
 
 var (
-	ErrNotConnected       = errors.New("not connected")
-	ErrAuthFailed         = errors.New("authentication failed")
-	ErrDuplicateUser      = errors.New("duplicate user")
-	ErrLoginClosed        = errors.New("teamserver closed connection during login")
-	ErrAlreadyConnected   = errors.New("already connected")
+	ErrNotConnected     = errors.New("not connected")
+	ErrAuthFailed       = errors.New("authentication failed")
+	ErrDuplicateUser    = errors.New("duplicate user")
+	ErrLoginClosed      = errors.New("teamserver closed connection during login")
+	ErrAlreadyConnected = errors.New("already connected")
 )
 
 type writeRequest struct {
@@ -27,12 +27,23 @@ type writeRequest struct {
 	done chan error
 }
 
+// payloadResult carries either a generated payload or the reason generation
+// failed back to the caller waiting in GeneratePayload.
+type payloadResult struct {
+	payload *Payload
+	err     error
+}
+
+// defaultPayloadTimeout is the upper bound for a single payload build. The
+// builder itself enforces a shorter per-command timeout.
+const defaultPayloadTimeout = 5 * time.Minute
+
 type Client struct {
-	cfg        Config
-	conn       *websocket.Conn
-	writeCh    chan writeRequest
-	readErrCh  chan error
-	closeCh    chan struct{}
+	cfg         Config
+	conn        *websocket.Conn
+	writeCh     chan writeRequest
+	readErrCh   chan error
+	closeCh     chan struct{}
 	reconnectCh chan struct{}
 
 	mu           sync.RWMutex
@@ -43,9 +54,11 @@ type Client struct {
 	pendingTasks map[string]*Task
 	seqCounter   uint64
 
-	// For payload generation
-	payloadCh    chan *Payload
+	// For payload generation. Wire responses carry no request ID, so only one
+	// request may be in flight at a time (guarded by payloadGenMu).
+	payloadCh    chan payloadResult
 	payloadMu    sync.Mutex
+	payloadGenMu sync.Mutex
 
 	// For login synchronization
 	loginDone    chan struct{}
@@ -84,7 +97,7 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	}
 
 	dialer := websocket.Dialer{
-		TLSClientConfig: tlsCfg,
+		TLSClientConfig:  tlsCfg,
 		HandshakeTimeout: 10 * time.Second,
 	}
 
@@ -112,11 +125,11 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	passwordHash := HashPassword(cfg.Password)
 	loginPkg := LoginPackage(cfg.User, passwordHash)
 	logger.Debug("MCP: Sending login package for user " + cfg.User + " to " + cfg.URL)
-	
+
 	// Start read and write loops FIRST
 	go c.readLoop()
 	go c.writeLoop()
-	
+
 	if err := c.sendPacket(loginPkg); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("send login: %w", err)
@@ -295,7 +308,7 @@ func (c *Client) handleListener(pkg *Package) {
 	case ListenerAdd, ListenerEdit:
 		listener.Protocol = info["Protocol"]
 		listener.Status = info["Status"]
-		
+
 		// Handle both event formats:
 		// 1. Full format from events.Listener.ListenerAdd: Hosts, HostBind, PortBind, PortConn, Secure
 		// 2. Simplified format from ListenerStartNotify: Host, Port
@@ -304,16 +317,16 @@ func (c *Client) handleListener(pkg *Package) {
 		} else if host, ok := info["Host"]; ok {
 			listener.HostBind = host
 		}
-		
+
 		if portBind, ok := info["PortBind"]; ok {
 			listener.PortBind = portBind
 		} else if port, ok := info["Port"]; ok {
 			listener.PortBind = port
 		}
-		
+
 		listener.Hosts = info["Hosts"]
 		listener.PortConn = info["PortConn"]
-		
+
 		if secure, ok := info["Secure"]; ok {
 			listener.Secure = secure == "true"
 		}
@@ -394,11 +407,9 @@ func (c *Client) handleOutput(demonID string, pkg *Package, info map[string]stri
 		c.outputs[demonID] = buf
 	}
 
-	seq := buf.Push(event)
-
-	// If there's a pending task for this cursor, we could notify
-	// but for now we just buffer
-	_ = seq
+	// If there's a pending task for this cursor, we could notify,
+	// but for now we just buffer.
+	buf.Push(event)
 }
 
 func (c *Client) handleChat(pkg *Package) {
@@ -410,40 +421,57 @@ func (c *Client) handleTeamserver(pkg *Package) {
 }
 
 func (c *Client) handleGate(pkg *Package) {
+	if pkg.Body.SubEvent != GateStageless {
+		return
+	}
+
 	info := ParsePackageInfo(pkg.Body.Info)
 
-	switch pkg.Body.SubEvent {
-	case GateStageless:
-		// Check if this is a payload response (has PayloadArray)
-		if payloadB64, ok := info["PayloadArray"]; ok && payloadB64 != "" {
-			data, err := base64.StdEncoding.DecodeString(payloadB64)
-			if err != nil {
-				logger.Error("Failed to decode payload: " + err.Error())
-				return
-			}
-
-			payload := &Payload{
-				AgentType: info["AgentType"],
-				Listener:  info["Listener"],
-				Arch:      info["Arch"],
-				Format:    info["Format"],
-				FileName:  info["FileName"],
-				Data:      data,
-			}
-
-			// Send to waiting caller
-			c.payloadMu.Lock()
-			ch := c.payloadCh
-			c.payloadMu.Unlock()
-
-			if ch != nil {
-				select {
-				case ch <- payload:
-				default:
-					logger.Warn("Payload channel full or nil, dropping payload")
-				}
-			}
+	// Check if this is a payload response (has PayloadArray).
+	if payloadB64, ok := info["PayloadArray"]; ok && payloadB64 != "" {
+		data, err := base64.StdEncoding.DecodeString(payloadB64)
+		if err != nil {
+			c.deliverPayloadResult(payloadResult{err: fmt.Errorf("decode payload: %w", err)})
+			return
 		}
+
+		c.deliverPayloadResult(payloadResult{payload: &Payload{
+			AgentType: info["AgentType"],
+			Listener:  info["Listener"],
+			Arch:      info["Arch"],
+			Format:    info["Format"],
+			FileName:  info["FileName"],
+			Data:      data,
+		}})
+		return
+	}
+
+	// The teamserver reports payload build failures as console messages on the
+	// same Gate.Stageless event. Treat an error as the terminal result so the
+	// caller does not wait for the full timeout.
+	if info["MessageType"] == "Error" {
+		message := info["Message"]
+		if message == "" {
+			message = "payload generation failed"
+		}
+		c.deliverPayloadResult(payloadResult{err: errors.New(message)})
+	}
+}
+
+// deliverPayloadResult hands a result to the GeneratePayload caller, if any.
+func (c *Client) deliverPayloadResult(result payloadResult) {
+	c.payloadMu.Lock()
+	ch := c.payloadCh
+	c.payloadMu.Unlock()
+
+	if ch == nil {
+		return
+	}
+
+	select {
+	case ch <- result:
+	default:
+		logger.Warn("Payload channel full, dropping payload result")
 	}
 }
 
@@ -545,7 +573,7 @@ func (c *Client) reconnect(ctx context.Context) error {
 	}
 
 	dialer := websocket.Dialer{
-		TLSClientConfig: tlsCfg,
+		TLSClientConfig:  tlsCfg,
 		HandshakeTimeout: 10 * time.Second,
 	}
 
@@ -653,44 +681,45 @@ func (c *Client) RemoveListener(name string) error {
 
 // GeneratePayload sends a Gate.Stageless package to generate a payload and waits for the result.
 func (c *Client) GeneratePayload(ctx context.Context, agentType, listener, arch, format, config string) (*Payload, error) {
-	// Create a channel to receive the payload
-	payloadCh := make(chan *Payload, 1)
+	// Payload responses on the wire carry no request ID. Serialize generation
+	// so a second request cannot consume the first request's result.
+	c.payloadGenMu.Lock()
+	defer c.payloadGenMu.Unlock()
+
+	payloadCh := make(chan payloadResult, 1)
 
 	c.payloadMu.Lock()
 	c.payloadCh = payloadCh
 	c.payloadMu.Unlock()
 
-	// Send the generation request
-	pkg := GateStagelessPackage(c.cfg.User, agentType, listener, arch, format, config)
-	if err := c.sendPacket(pkg); err != nil {
+	defer func() {
 		c.payloadMu.Lock()
 		c.payloadCh = nil
 		c.payloadMu.Unlock()
+	}()
+
+	pkg := GateStagelessPackage(c.cfg.User, agentType, listener, arch, format, config)
+	if err := c.sendPacket(pkg); err != nil {
 		return nil, fmt.Errorf("send packet: %w", err)
 	}
 
-	// Wait for the payload or context cancellation
+	timer := time.NewTimer(defaultPayloadTimeout)
+	defer timer.Stop()
+
 	select {
-	case payload := <-payloadCh:
-		c.payloadMu.Lock()
-		c.payloadCh = nil
-		c.payloadMu.Unlock()
-		return payload, nil
+	case result := <-payloadCh:
+		return result.payload, result.err
 	case <-ctx.Done():
-		c.payloadMu.Lock()
-		c.payloadCh = nil
-		c.payloadMu.Unlock()
 		return nil, ctx.Err()
-	case <-time.After(5 * time.Minute):
-		c.payloadMu.Lock()
-		c.payloadCh = nil
-		c.payloadMu.Unlock()
-		return nil, fmt.Errorf("payload generation timeout")
+	case <-timer.C:
+		return nil, fmt.Errorf("payload generation timed out after %s", defaultPayloadTimeout)
 	}
 }
 
 func parseInt(s string) int {
 	var result int
-	fmt.Sscanf(s, "%d", &result)
+	if _, err := fmt.Sscanf(s, "%d", &result); err != nil {
+		return 0
+	}
 	return result
 }
