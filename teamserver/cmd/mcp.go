@@ -30,6 +30,7 @@ type McpFlags struct {
 	AuditLog       string
 	MaxOutputBytes int
 	NoReconnect    bool
+	LootRoot       string
 }
 
 var mcpFlags McpFlags
@@ -47,6 +48,7 @@ func init() {
 	CobraMcp.Flags().StringVar(&mcpFlags.AuditLog, "audit-log", "stderr", "audit log destination (stderr or file path)")
 	CobraMcp.Flags().IntVar(&mcpFlags.MaxOutputBytes, "max-output-bytes", 262144, "max output bytes per call")
 	CobraMcp.Flags().BoolVar(&mcpFlags.NoReconnect, "no-reconnect", false, "disable automatic reconnection")
+	CobraMcp.Flags().StringVar(&mcpFlags.LootRoot, "loot-root", "data/loot", "teamserver loot directory containing run artifacts")
 
 	HavocCli.AddCommand(CobraMcp)
 }
@@ -69,6 +71,7 @@ func mcpFunc(cmd *cobra.Command, args []string) error {
 	applyEnv("user", "HAVOC_MCP_USER", &mcpFlags.User)
 	applyEnv("password", "HAVOC_MCP_PASSWORD", &mcpFlags.Password)
 	applyEnv("tls-ca", "HAVOC_MCP_TLS_CA", &mcpFlags.TLSCA)
+	applyEnv("loot-root", "HAVOC_MCP_LOOT_ROOT", &mcpFlags.LootRoot)
 
 	// Validate required flags
 	if mcpFlags.Password == "" {
@@ -102,6 +105,7 @@ func mcpFunc(cmd *cobra.Command, args []string) error {
 		AllowedTools:   allowedTools,
 		AuditLog:       mcpFlags.AuditLog,
 		MaxOutputBytes: mcpFlags.MaxOutputBytes,
+		LootRoot:       mcpFlags.LootRoot,
 	}
 
 	// Create operator client

@@ -10,11 +10,14 @@ type Config struct {
 	AuditLog string
 	// MaxOutputBytes is the maximum output bytes per call
 	MaxOutputBytes int
+	// LootRoot is the teamserver loot directory containing run artifacts
+	LootRoot string
 }
 
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
 		MaxOutputBytes: 262144,
+		LootRoot:       "data/loot",
 	}
 }

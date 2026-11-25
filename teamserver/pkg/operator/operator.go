@@ -21,6 +21,10 @@ func (c *Client) SendTask(req TaskRequest) (Task, error) {
 		}
 	}
 
+	// Capture the output cursor before sending so a fast agent response cannot
+	// arrive between the packet write and cursor capture.
+	cursor := c.getOutputCursor(req.SessionID)
+
 	// Create package
 	pkg := TaskPackage(c.cfg.User, req.SessionID, commandID, req.Info, req.CommandLine)
 	if err := c.sendPacket(pkg); err != nil {
@@ -28,7 +32,6 @@ func (c *Client) SendTask(req TaskRequest) (Task, error) {
 	}
 
 	// Record task for attribution
-	cursor := c.getOutputCursor(req.SessionID)
 	task := Task{
 		TaskID:       req.Info["TaskID"],
 		SessionID:    req.SessionID,
@@ -103,6 +106,39 @@ func (c *Client) WaitOutput(ctx context.Context, sessionID string, cursor uint64
 	}
 }
 
+// WaitOutputUntil blocks until output matching the predicate is available or
+// the timeout expires. All events observed before the match are returned.
+func (c *Client) WaitOutputUntil(ctx context.Context, sessionID string, cursor uint64, timeout time.Duration, match func(OutputEvent) bool) OutputPage {
+	deadline := time.Now().Add(timeout)
+	events := make([]OutputEvent, 0)
+	nextCursor := cursor
+
+	for {
+		page := c.ReadOutput(sessionID, nextCursor, 1024*1024)
+		for _, event := range page.Events {
+			events = append(events, event)
+			nextCursor = event.Seq
+			if match != nil && match(event) {
+				return OutputPage{
+					Events:     events,
+					NextCursor: nextCursor,
+					Truncated:  page.Truncated,
+				}
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return OutputPage{Events: events, NextCursor: nextCursor}
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		if time.Now().After(deadline) {
+			return OutputPage{Events: events, NextCursor: nextCursor}
+		}
+	}
+}
+
 // GetTask retrieves a task by ID with its output.
 func (c *Client) GetTask(taskID string) (Task, OutputPage, bool) {
 	c.mu.RLock()
@@ -127,9 +163,18 @@ func decodeOutput(b64 string) string {
 		return b64 // Return as-is if not base64
 	}
 
-	var output map[string]interface{}
+	var output map[string]any
 	if err := json.Unmarshal(data, &output); err != nil {
 		return string(data)
+	}
+
+	// Preserve the screenshot envelope so the MCP layer can expose its
+	// base64 payload and metadata without decoding it as ordinary text.
+	if miscType, ok := output["MiscType"].(string); ok && miscType == "screenshot" {
+		encoded, err := json.Marshal(output)
+		if err == nil {
+			return string(encoded)
+		}
 	}
 
 	// Prefer Output field, then Message
