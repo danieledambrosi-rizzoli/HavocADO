@@ -188,6 +188,14 @@ namespace HavocNamespace
                 QString RecordType;
                 QString Encoding;
                 QString Frequency;
+                QString EncryptKey;
+                QString PktSize;
+                QString TTL;
+                QString BurstEnabled;
+                QString BurstSleep;
+                QString BurstJitter;
+                QString Resolvers;
+                QString DohResolvers;
             } DNS;
 
             typedef MapStrStr Service;

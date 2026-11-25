@@ -4,7 +4,8 @@
 #
 # Purpose:
 #   Start an isolated teamserver with a DNS listener and verify the listener
-#   binds UDP+TCP, answers DNS queries and releases the port on shutdown.
+#   binds UDP+TCP, acknowledges an upload with the AdaptixC2 compatible PUT
+#   acknowledgement and releases the port on shutdown.
 #
 # Arguments:
 #   --binary <path>   teamserver binary            (default: <repo>/havoc)
@@ -24,7 +25,7 @@
 #   2  teamserver did not open the DNS port
 #   3  DNS queries did not behave as documented
 #   4  DNS port was still bound after shutdown
-#   5  required dependency (dig) is missing
+#   5  required dependency (dig, python3) is missing
 #
 # Side effects:
 #   Binds <host>:<port> UDP+TCP and <ts-port> TCP on the loopback interface,
@@ -41,6 +42,14 @@ TS_PORT=40056
 DOMAIN=c2.smoke.test
 TIMEOUT=20
 
+# The RC4 key of the listener. The profile below uses the same key so that
+# the script can build the queries of the agent.
+KEY="000102030405060708090a0b0c0d0e0f"
+
+# The sequence number is XORed with the mask before it is written into the
+# QNAME. The teamserver unmasks it again.
+SEQ_MASKED="5a5a5a5b"
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --binary)  BINARY="$2"; shift 2 ;;
@@ -54,10 +63,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if ! command -v dig >/dev/null 2>&1; then
-    echo "[!] dig not found (install dnsutils/bind-utils)" >&2
-    exit 5
-fi
+for dependency in dig python3; do
+    if ! command -v "$dependency" >/dev/null 2>&1; then
+        echo "[!] $dependency not found" >&2
+        exit 5
+    fi
+done
 
 if [ ! -x "$BINARY" ]; then
     echo "[!] teamserver binary not found or not executable: $BINARY" >&2
@@ -101,11 +112,10 @@ Listeners {
         Domain       = "$DOMAIN"
         BindHost     = "$HOST"
         BindPort     = $PORT
-        RecordType   = "TXT"
-        Encoding     = "base64url"
         Frequency    = 5
         KillDate     = ""
         WorkingHours = ""
+        EncryptKey   = "$KEY"
     }
 }
 
@@ -119,6 +129,36 @@ Demon {
     }
 }
 EOF
+
+# payload_label builds the DATA_LABELS of a query. The payload is framed as
+# [total][offset][chunk], encrypted with RC4 and encoded with base32.
+payload_label() {
+    python3 - "$KEY" "$1" <<'PY'
+import base64
+import sys
+
+key = bytes.fromhex(sys.argv[1])
+payload = sys.argv[2].encode()
+
+frame = len(payload).to_bytes(4, "big") + (0).to_bytes(4, "big") + payload
+
+state = list(range(256))
+j = 0
+for i in range(256):
+    j = (j + state[i] + key[i % len(key)]) & 0xFF
+    state[i], state[j] = state[j], state[i]
+
+i = j = 0
+encrypted = bytearray()
+for byte in frame:
+    i = (i + 1) & 0xFF
+    j = (j + state[i]) & 0xFF
+    state[i], state[j] = state[j], state[i]
+    encrypted.append(byte ^ state[(state[i] + state[j]) & 0xFF])
+
+sys.stdout.write(base64.b32encode(bytes(encrypted)).decode().rstrip("="))
+PY
+}
 
 port_bound() {
     if command -v ss >/dev/null 2>&1; then
@@ -159,31 +199,40 @@ if [ "$OPENED" -ne 1 ]; then
 fi
 echo "[+] UDP/TCP port $PORT is bound"
 
-# An incomplete chunk sequence must not produce an answer.
-CHUNK_A="$(printf '%s' 'first-half-of-a-message' | base64 | tr '+/' '-_' | tr -d '=')"
-CHUNK_B="$(printf '%s' '-second-half' | base64 | tr '+/' '-_' | tr -d '=')"
-ANSWER="$(dig @"$HOST" -p "$PORT" TXT "0.2.deadbeef.$CHUNK_A.$DOMAIN" +short +time=2 +tries=1 2>/dev/null)"
-if [ -n "$ANSWER" ]; then
-    echo "[!] incomplete chunk produced an answer: $ANSWER"
+# An upload of a single fragment is acknowledged with an A record. The first
+# byte carries the flags (0x01 complete) and the last three bytes carry the
+# next expected offset.
+PAYLOAD="hello world"
+LABEL="$(payload_label "$PAYLOAD")"
+ANSWER="$(dig @"$HOST" -p "$PORT" A "deadbeef.cdn.$SEQ_MASKED.0.$LABEL.$DOMAIN" +short +time=2 +tries=1 2>/dev/null)"
+EXPECTED="1.0.0.$(printf '%d' "${#PAYLOAD}")"
+
+if [ "$ANSWER" != "$EXPECTED" ]; then
+    echo "[!] PUT acknowledgement is '$ANSWER', expected '$EXPECTED'"
     exit 3
 fi
-echo "[+] incomplete chunk produced no answer"
+echo "[+] PUT acknowledgement carries the complete flag and the next offset"
 
-# A complete but unparseable message must be consumed silently.
-dig @"$HOST" -p "$PORT" TXT "1.2.deadbeef.$CHUNK_B.$DOMAIN" +short +time=2 +tries=1 >/dev/null 2>&1
+# A query with an unknown operation is answered with a plain TXT record.
+ANSWER="$(dig @"$HOST" -p "$PORT" TXT "deadbeef.unknown.$SEQ_MASKED.0.$LABEL.$DOMAIN" +short +time=2 +tries=1 2>/dev/null | tr -d '"')"
+if [ "$ANSWER" != "OK" ]; then
+    echo "[!] unknown operation answered with '$ANSWER', expected 'OK'"
+    exit 3
+fi
+echo "[+] unknown operation answered with OK"
+
+# The same handler must answer over TCP as well.
+if ! dig +tcp @"$HOST" -p "$PORT" A "deadbeef.cdn.$SEQ_MASKED.0.$LABEL.$DOMAIN" +time=2 +tries=1 >/dev/null 2>&1; then
+    echo "[!] TCP query failed"
+    exit 3
+fi
+echo "[+] TCP query answered"
+
 if ! kill -0 "$PID" 2>/dev/null; then
-    echo "[!] teamserver died while handling chunks"
+    echo "[!] teamserver died while handling queries"
     sed 's/^/    /' "$LOG"
     exit 3
 fi
-echo "[+] chunked queries handled without crashing"
-
-# The same handler must answer over TCP as well.
-if ! dig +tcp @"$HOST" -p "$PORT" TXT "0.1.deadbeef.$CHUNK_A.$DOMAIN" +time=2 +tries=1 >/dev/null 2>&1; then
-    echo "[!] TCP TXT query failed"
-    exit 3
-fi
-echo "[+] TCP TXT query answered"
 
 kill -TERM "$PID" 2>/dev/null
 wait "$PID" 2>/dev/null

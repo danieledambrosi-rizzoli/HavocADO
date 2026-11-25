@@ -63,7 +63,14 @@ VOID CommandDispatcher( VOID )
             break;
         }
 
-        SleepObf();
+#ifdef TRANSPORT_DNS
+        /* Burst mode ignores the regular sleep interval and polls the
+         * teamserver in rapid succession. */
+        if ( ! DnsBurstWait() )
+#endif
+        {
+            SleepObf();
+        }
 
         if ( ReachedKillDate() ) {
             KillDate();

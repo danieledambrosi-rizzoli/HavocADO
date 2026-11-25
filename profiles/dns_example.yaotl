@@ -25,11 +25,19 @@ Listeners {
         Domain     = "example.com"
         BindHost   = "0.0.0.0"
         BindPort   = 53
-        RecordType = "TXT"
-        Encoding   = "base64url"
         Frequency  = 30
         KillDate   = ""
         WorkingHours = ""
+
+        # AdaptixC2 compatible DNS transport tuning.
+        PktSize      = 512
+        TTL          = 10
+        EncryptKey   = "000102030405060708090a0b0c0d0e0f"
+        BurstEnabled = false
+        BurstSleep   = 50
+        BurstJitter  = 0
+        Resolvers    = "8.8.8.8"
+        DohResolvers = ""
     }
 }
 

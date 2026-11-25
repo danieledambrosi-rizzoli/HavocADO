@@ -327,6 +327,8 @@ func (t *Teamserver) Start() {
 			var HandlerData = handlers.DNSConfig{
 				Name:         listener.Name,
 				Domain:       listener.Domain,
+				HostBind:     listener.BindHost,
+				PortBind:     listener.BindPort,
 				BindHost:     listener.BindHost,
 				BindPort:     listener.BindPort,
 				KillDate:     KillDate,
@@ -334,6 +336,14 @@ func (t *Teamserver) Start() {
 				RecordType:   listener.RecordType,
 				Encoding:     listener.Encoding,
 				Frequency:    listener.Frequency,
+				PktSize:      listener.PktSize,
+				TTL:          listener.TTL,
+				EncryptKey:   listener.EncryptKey,
+				BurstEnabled: listener.BurstEnabled,
+				BurstSleep:   listener.BurstSleep,
+				BurstJitter:  listener.BurstJitter,
+				Resolvers:    listener.Resolvers,
+				DohResolvers: listener.DohResolvers,
 			}
 
 			if err := t.ListenerStart(handlers.LISTENER_DNS, HandlerData); err != nil {
@@ -500,14 +510,10 @@ func (t *Teamserver) Start() {
 				continue
 			}
 
-			HandlerData.Domain = dbString(Data["Domain"])
-			HandlerData.BindHost = dbString(Data["BindHost"])
-			HandlerData.BindPort = dbInt(Data["BindPort"])
-			HandlerData.RecordType = dbString(Data["RecordType"])
-			HandlerData.Encoding = dbString(Data["Encoding"])
-			HandlerData.Frequency = dbInt(Data["Frequency"])
-			HandlerData.KillDate, _ = strconv.ParseInt(dbString(Data["KillDate"]), 10, 64)
-			HandlerData.WorkingHours = dbString(Data["WorkingHours"])
+			HandlerData = dnsConfigFromMap(Data)
+
+			// The name of the listener is not part of the stored config.
+			HandlerData.Name = listener["Name"]
 
 			if err := t.ListenerStart(handlers.LISTENER_DNS, HandlerData); err != nil && err.Error() != "listener already exists" {
 				logger.SetStdOut(os.Stderr)
@@ -1049,4 +1055,42 @@ func dbInt(value any) int {
 	default:
 		return 0
 	}
+}
+
+// dnsConfigFromMap reads a DNS listener configuration from a client event
+// payload or from the listener table in the database. Both sources may store
+// the same field as a string or as a number.
+func dnsConfigFromMap(info map[string]any) handlers.DNSConfig {
+	var config handlers.DNSConfig
+
+	config.Name = dbString(info["Name"])
+	config.Domain = dbString(info["Domain"])
+	config.BindHost = dbString(info["BindHost"])
+	config.HostBind = config.BindHost
+	config.BindPort = dbInt(info["BindPort"])
+	config.PortBind = config.BindPort
+	config.RecordType = dbString(info["RecordType"])
+	config.Encoding = dbString(info["Encoding"])
+	config.Frequency = dbInt(info["Frequency"])
+	config.PktSize = dbInt(info["PktSize"])
+	config.TTL = dbInt(info["TTL"])
+	config.EncryptKey = dbString(info["EncryptKey"])
+	config.BurstSleep = dbInt(info["BurstSleep"])
+	config.BurstJitter = dbInt(info["BurstJitter"])
+	config.Resolvers = dbString(info["Resolvers"])
+	config.DohResolvers = dbString(info["DohResolvers"])
+
+	switch v := info["BurstEnabled"].(type) {
+	case bool:
+		config.BurstEnabled = v
+	case string:
+		config.BurstEnabled = v == "true" || v == "1"
+	default:
+		config.BurstEnabled = dbInt(info["BurstEnabled"]) != 0
+	}
+
+	config.KillDate, _ = strconv.ParseInt(dbString(info["KillDate"]), 10, 64)
+	config.WorkingHours = dbString(info["WorkingHours"])
+
+	return config
 }

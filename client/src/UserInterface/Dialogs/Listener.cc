@@ -21,6 +21,13 @@ bool is_number( const std::string& s )
     return !s.empty() && it == s.end();
 }
 
+bool is_hex( const std::string& s )
+{
+    std::string::const_iterator it = s.begin();
+    while ( it != s.end() && std::isxdigit( static_cast<unsigned char>( *it ) ) ) ++it;
+    return !s.empty() && it == s.end();
+}
+
 NewListener::NewListener( QDialog* Dialog )
 {
     ListenerDialog = Dialog;
@@ -224,6 +231,76 @@ NewListener::NewListener( QDialog* Dialog )
     InputFrequency->setText("30");
     formLayout_DNS->setWidget(5, QFormLayout::FieldRole, InputFrequency);
 
+    LabelEncryptKey = new QLabel(PageDNS);
+    LabelEncryptKey->setObjectName(QString::fromUtf8("LabelEncryptKey"));
+    formLayout_DNS->setWidget(6, QFormLayout::LabelRole, LabelEncryptKey);
+
+    InputEncryptKey = new QLineEdit(PageDNS);
+    InputEncryptKey->setObjectName(QString::fromUtf8("InputEncryptKey"));
+    InputEncryptKey->setPlaceholderText(QString::fromUtf8("empty = random key"));
+    formLayout_DNS->setWidget(6, QFormLayout::FieldRole, InputEncryptKey);
+
+    LabelPktSize = new QLabel(PageDNS);
+    LabelPktSize->setObjectName(QString::fromUtf8("LabelPktSize"));
+    formLayout_DNS->setWidget(7, QFormLayout::LabelRole, LabelPktSize);
+
+    InputPktSize = new QLineEdit(PageDNS);
+    InputPktSize->setObjectName(QString::fromUtf8("InputPktSize"));
+    InputPktSize->setText("512");
+    formLayout_DNS->setWidget(7, QFormLayout::FieldRole, InputPktSize);
+
+    LabelTTL = new QLabel(PageDNS);
+    LabelTTL->setObjectName(QString::fromUtf8("LabelTTL"));
+    formLayout_DNS->setWidget(8, QFormLayout::LabelRole, LabelTTL);
+
+    InputTTL = new QLineEdit(PageDNS);
+    InputTTL->setObjectName(QString::fromUtf8("InputTTL"));
+    InputTTL->setText("10");
+    formLayout_DNS->setWidget(8, QFormLayout::FieldRole, InputTTL);
+
+    LabelBurstEnabled = new QLabel(PageDNS);
+    LabelBurstEnabled->setObjectName(QString::fromUtf8("LabelBurstEnabled"));
+    formLayout_DNS->setWidget(9, QFormLayout::LabelRole, LabelBurstEnabled);
+
+    CheckBurstEnabled = new QCheckBox(PageDNS);
+    CheckBurstEnabled->setObjectName(QString::fromUtf8("CheckBurstEnabled"));
+    formLayout_DNS->setWidget(9, QFormLayout::FieldRole, CheckBurstEnabled);
+
+    LabelBurstSleep = new QLabel(PageDNS);
+    LabelBurstSleep->setObjectName(QString::fromUtf8("LabelBurstSleep"));
+    formLayout_DNS->setWidget(10, QFormLayout::LabelRole, LabelBurstSleep);
+
+    InputBurstSleep = new QLineEdit(PageDNS);
+    InputBurstSleep->setObjectName(QString::fromUtf8("InputBurstSleep"));
+    InputBurstSleep->setText("50");
+    formLayout_DNS->setWidget(10, QFormLayout::FieldRole, InputBurstSleep);
+
+    LabelBurstJitter = new QLabel(PageDNS);
+    LabelBurstJitter->setObjectName(QString::fromUtf8("LabelBurstJitter"));
+    formLayout_DNS->setWidget(11, QFormLayout::LabelRole, LabelBurstJitter);
+
+    InputBurstJitter = new QLineEdit(PageDNS);
+    InputBurstJitter->setObjectName(QString::fromUtf8("InputBurstJitter"));
+    InputBurstJitter->setText("0");
+    formLayout_DNS->setWidget(11, QFormLayout::FieldRole, InputBurstJitter);
+
+    LabelResolvers = new QLabel(PageDNS);
+    LabelResolvers->setObjectName(QString::fromUtf8("LabelResolvers"));
+    formLayout_DNS->setWidget(12, QFormLayout::LabelRole, LabelResolvers);
+
+    InputResolvers = new QLineEdit(PageDNS);
+    InputResolvers->setObjectName(QString::fromUtf8("InputResolvers"));
+    InputResolvers->setText("8.8.8.8");
+    formLayout_DNS->setWidget(12, QFormLayout::FieldRole, InputResolvers);
+
+    LabelDohResolvers = new QLabel(PageDNS);
+    LabelDohResolvers->setObjectName(QString::fromUtf8("LabelDohResolvers"));
+    formLayout_DNS->setWidget(13, QFormLayout::LabelRole, LabelDohResolvers);
+
+    InputDohResolvers = new QLineEdit(PageDNS);
+    InputDohResolvers->setObjectName(QString::fromUtf8("InputDohResolvers"));
+    formLayout_DNS->setWidget(13, QFormLayout::FieldRole, InputDohResolvers);
+
     gridLayout_2->addWidget( StackWidgetConfigPages, 0, 0, 1, 1 );
 
 
@@ -383,6 +460,14 @@ NewListener::NewListener( QDialog* Dialog )
     LabelRecordType->setText(QCoreApplication::translate("ListenerWidget", "Record Type: ", nullptr));
     LabelEncoding->setText(QCoreApplication::translate("ListenerWidget", "Encoding: ", nullptr));
     LabelFrequency->setText(QCoreApplication::translate("ListenerWidget", "Frequency (seconds): ", nullptr));
+    LabelEncryptKey->setText(QCoreApplication::translate("ListenerWidget", "Encrypt Key (16 bytes): ", nullptr));
+    LabelPktSize->setText(QCoreApplication::translate("ListenerWidget", "Packet Size: ", nullptr));
+    LabelTTL->setText(QCoreApplication::translate("ListenerWidget", "TTL: ", nullptr));
+    LabelBurstEnabled->setText(QCoreApplication::translate("ListenerWidget", "Burst Mode: ", nullptr));
+    LabelBurstSleep->setText(QCoreApplication::translate("ListenerWidget", "Burst Sleep (ms): ", nullptr));
+    LabelBurstJitter->setText(QCoreApplication::translate("ListenerWidget", "Burst Jitter (%): ", nullptr));
+    LabelResolvers->setText(QCoreApplication::translate("ListenerWidget", "Resolvers: ", nullptr));
+    LabelDohResolvers->setText(QCoreApplication::translate("ListenerWidget", "DoH Resolvers: ", nullptr));
 
     ComboPayload->addItem( "Https" );
     ComboPayload->addItem( "Http" );
@@ -653,6 +738,23 @@ MapStrStr NewListener::Start( Util::ListenerItem Item, bool Edit )
             InputDNSBindPort->setText( Info.BindPort );
             InputFrequency->setText( Info.Frequency );
 
+            if ( ! Info.EncryptKey.isEmpty() )
+                InputEncryptKey->setText( Info.EncryptKey );
+            if ( ! Info.PktSize.isEmpty() )
+                InputPktSize->setText( Info.PktSize );
+            if ( ! Info.TTL.isEmpty() )
+                InputTTL->setText( Info.TTL );
+            if ( ! Info.BurstSleep.isEmpty() )
+                InputBurstSleep->setText( Info.BurstSleep );
+            if ( ! Info.BurstJitter.isEmpty() )
+                InputBurstJitter->setText( Info.BurstJitter );
+            if ( ! Info.Resolvers.isEmpty() )
+                InputResolvers->setText( Info.Resolvers );
+            if ( ! Info.DohResolvers.isEmpty() )
+                InputDohResolvers->setText( Info.DohResolvers );
+
+            CheckBurstEnabled->setChecked( Info.BurstEnabled == "true" || Info.BurstEnabled == "1" );
+
             if ( ! Info.RecordType.isEmpty() )
                 ComboRecordType->setCurrentText( Info.RecordType );
             if ( ! Info.Encoding.isEmpty() )
@@ -817,6 +919,14 @@ MapStrStr NewListener::Start( Util::ListenerItem Item, bool Edit )
         ListenerInfo.insert( { "RecordType", ComboRecordType->currentText().toStdString() } );
         ListenerInfo.insert( { "Encoding",   ComboEncoding->currentText().toStdString() } );
         ListenerInfo.insert( { "Frequency",  InputFrequency->text().toStdString() } );
+        ListenerInfo.insert( { "EncryptKey", InputEncryptKey->text().toStdString() } );
+        ListenerInfo.insert( { "PktSize",    InputPktSize->text().toStdString() } );
+        ListenerInfo.insert( { "TTL",        InputTTL->text().toStdString() } );
+        ListenerInfo.insert( { "BurstEnabled", CheckBurstEnabled->isChecked() ? "true" : "false" } );
+        ListenerInfo.insert( { "BurstSleep", InputBurstSleep->text().toStdString() } );
+        ListenerInfo.insert( { "BurstJitter", InputBurstJitter->text().toStdString() } );
+        ListenerInfo.insert( { "Resolvers",  InputResolvers->text().toStdString() } );
+        ListenerInfo.insert( { "DohResolvers", InputDohResolvers->text().toStdString() } );
     }
     else
     {
@@ -1067,6 +1177,83 @@ void HavocNamespace::UserInterface::Dialogs::NewListener::onButton_Save()
         if ( InputFrequency->text().toInt() < 5 || InputFrequency->text().toInt() > 300 )
         {
             MessageBox( "Listener Error", "Frequency must be between 5 and 300 seconds", QMessageBox::Critical );
+
+            return;
+        }
+
+        /* The encryption key is either 32 hex characters or 16 raw characters.
+         * An empty key lets the teamserver generate a random one. */
+        if ( ! InputEncryptKey->text().isEmpty() )
+        {
+            auto Key = InputEncryptKey->text().toStdString();
+
+            if ( Key.size() != 16 && Key.size() != 32 )
+            {
+                MessageBox( "Listener Error", "Encrypt Key must be 16 bytes (32 hex characters)", QMessageBox::Critical );
+
+                return;
+            }
+
+            if ( Key.size() == 32 && ! is_hex( Key ) )
+            {
+                MessageBox( "Listener Error", "Encrypt Key is not a valid hex string", QMessageBox::Critical );
+
+                return;
+            }
+        }
+
+        if ( InputPktSize->text().isEmpty() || ! is_number( InputPktSize->text().toStdString() ) )
+        {
+            MessageBox( "Listener Error", "Packet Size is not a number", QMessageBox::Critical );
+
+            return;
+        }
+
+        if ( InputPktSize->text().toInt() < 64 || InputPktSize->text().toInt() > 4096 )
+        {
+            MessageBox( "Listener Error", "Packet Size must be between 64 and 4096 bytes", QMessageBox::Critical );
+
+            return;
+        }
+
+        if ( InputTTL->text().isEmpty() || ! is_number( InputTTL->text().toStdString() ) )
+        {
+            MessageBox( "Listener Error", "TTL is not a number", QMessageBox::Critical );
+
+            return;
+        }
+
+        if ( InputTTL->text().toInt() < 1 || InputTTL->text().toInt() > 86400 )
+        {
+            MessageBox( "Listener Error", "TTL must be between 1 and 86400 seconds", QMessageBox::Critical );
+
+            return;
+        }
+
+        if ( InputBurstSleep->text().isEmpty() || ! is_number( InputBurstSleep->text().toStdString() ) )
+        {
+            MessageBox( "Listener Error", "Burst Sleep is not a number", QMessageBox::Critical );
+
+            return;
+        }
+
+        if ( InputBurstSleep->text().toInt() < 10 || InputBurstSleep->text().toInt() > 60000 )
+        {
+            MessageBox( "Listener Error", "Burst Sleep must be between 10 and 60000 milliseconds", QMessageBox::Critical );
+
+            return;
+        }
+
+        if ( InputBurstJitter->text().isEmpty() || ! is_number( InputBurstJitter->text().toStdString() ) )
+        {
+            MessageBox( "Listener Error", "Burst Jitter is not a number", QMessageBox::Critical );
+
+            return;
+        }
+
+        if ( InputBurstJitter->text().toInt() < 0 || InputBurstJitter->text().toInt() > 90 )
+        {
+            MessageBox( "Listener Error", "Burst Jitter must be between 0 and 90 percent", QMessageBox::Critical );
 
             return;
         }

@@ -583,20 +583,7 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 			case handlers.AGENT_DNS:
 
-				var Config handlers.DNSConfig
-
-				Config.Name, _ = pk.Body.Info["Name"].(string)
-				Config.Domain, _ = pk.Body.Info["Domain"].(string)
-				Config.BindHost, _ = pk.Body.Info["BindHost"].(string)
-				Config.RecordType, _ = pk.Body.Info["RecordType"].(string)
-				Config.Encoding, _ = pk.Body.Info["Encoding"].(string)
-
-				if val, ok := pk.Body.Info["BindPort"].(string); ok {
-					Config.BindPort, _ = strconv.Atoi(val)
-				}
-				if val, ok := pk.Body.Info["Frequency"].(string); ok {
-					Config.Frequency, _ = strconv.Atoi(val)
-				}
+				var Config = dnsConfigFromMap(pk.Body.Info)
 
 				if err := t.ListenerStart(handlers.LISTENER_DNS, Config); err != nil {
 					t.Clients.Range(func(key, value any) bool {
@@ -835,24 +822,11 @@ func (t *Teamserver) DispatchEvent(pk packager.Package) {
 
 			case handlers.AGENT_DNS:
 
-				var Config handlers.DNSConfig
+				// Only the settings that the client sent are applied, the
+				// event carries the effective configuration of the listener.
+				var Effective = t.ListenerEditDNS(pk.Body.Info)
 
-				Config.Name, _ = pk.Body.Info["Name"].(string)
-				Config.Domain, _ = pk.Body.Info["Domain"].(string)
-				Config.BindHost, _ = pk.Body.Info["BindHost"].(string)
-				Config.RecordType, _ = pk.Body.Info["RecordType"].(string)
-				Config.Encoding, _ = pk.Body.Info["Encoding"].(string)
-
-				if val, ok := pk.Body.Info["BindPort"].(string); ok {
-					Config.BindPort, _ = strconv.Atoi(val)
-				}
-				if val, ok := pk.Body.Info["Frequency"].(string); ok {
-					Config.Frequency, _ = strconv.Atoi(val)
-				}
-
-				t.ListenerEdit(handlers.LISTENER_DNS, Config)
-
-				var p = events.Listener.ListenerEdit(handlers.LISTENER_DNS, &Config)
+				var p = events.Listener.ListenerEdit(handlers.LISTENER_DNS, Effective)
 
 				t.EventAppend(p)
 				t.EventBroadcast("", p)

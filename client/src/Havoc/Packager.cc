@@ -292,12 +292,20 @@ bool Packager::DispatchListener( Util::Packager::PPackage Package )
             else if ( ListenerInfo.Protocol == Listener::PayloadDNS.toStdString() )
             {
                 ListenerInfo.Info = Listener::DNS {
-                    .Domain     = Package->Body.Info[ "Domain" ].c_str(),
-                    .BindHost   = Package->Body.Info[ "BindHost" ].c_str(),
-                    .BindPort   = Package->Body.Info[ "BindPort" ].c_str(),
-                    .RecordType = Package->Body.Info[ "RecordType" ].c_str(),
-                    .Encoding   = Package->Body.Info[ "Encoding" ].c_str(),
-                    .Frequency  = Package->Body.Info[ "Frequency" ].c_str(),
+                    .Domain       = Package->Body.Info[ "Domain" ].c_str(),
+                    .BindHost     = Package->Body.Info[ "BindHost" ].c_str(),
+                    .BindPort     = Package->Body.Info[ "BindPort" ].c_str(),
+                    .RecordType   = Package->Body.Info[ "RecordType" ].c_str(),
+                    .Encoding     = Package->Body.Info[ "Encoding" ].c_str(),
+                    .Frequency    = Package->Body.Info[ "Frequency" ].c_str(),
+                    .EncryptKey   = Package->Body.Info[ "EncryptKey" ].c_str(),
+                    .PktSize      = Package->Body.Info[ "PktSize" ].c_str(),
+                    .TTL          = Package->Body.Info[ "TTL" ].c_str(),
+                    .BurstEnabled = Package->Body.Info[ "BurstEnabled" ].c_str(),
+                    .BurstSleep   = Package->Body.Info[ "BurstSleep" ].c_str(),
+                    .BurstJitter  = Package->Body.Info[ "BurstJitter" ].c_str(),
+                    .Resolvers    = Package->Body.Info[ "Resolvers" ].c_str(),
+                    .DohResolvers = Package->Body.Info[ "DohResolvers" ].c_str(),
                 };
             }
             else

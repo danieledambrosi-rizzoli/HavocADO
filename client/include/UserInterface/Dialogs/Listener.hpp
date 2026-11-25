@@ -153,6 +153,22 @@ public:
     QComboBox*      ComboEncoding;
     QLabel*         LabelFrequency;
     QLineEdit*      InputFrequency;
+    QLabel*         LabelEncryptKey;
+    QLineEdit*      InputEncryptKey;
+    QLabel*         LabelPktSize;
+    QLineEdit*      InputPktSize;
+    QLabel*         LabelTTL;
+    QLineEdit*      InputTTL;
+    QLabel*         LabelBurstEnabled;
+    QCheckBox*      CheckBurstEnabled;
+    QLabel*         LabelBurstSleep;
+    QLineEdit*      InputBurstSleep;
+    QLabel*         LabelBurstJitter;
+    QLineEdit*      InputBurstJitter;
+    QLabel*         LabelResolvers;
+    QLineEdit*      InputResolvers;
+    QLabel*         LabelDohResolvers;
+    QLineEdit*      InputDohResolvers;
     QFormLayout*    formLayout_DNS;
 
 public:

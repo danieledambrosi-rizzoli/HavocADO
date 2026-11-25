@@ -245,10 +245,7 @@ func (t *Teamserver) ListenerEdit(Type int, Config any) {
 		for i := range t.Listeners {
 
 			if t.Listeners[i].Name == Config.(handlers.DNSConfig).Name {
-				t.Listeners[i].Config.(*handlers.DNS).Config.Domain = Config.(handlers.DNSConfig).Domain
-				t.Listeners[i].Config.(*handlers.DNS).Config.RecordType = Config.(handlers.DNSConfig).RecordType
-				t.Listeners[i].Config.(*handlers.DNS).Config.Encoding = Config.(handlers.DNSConfig).Encoding
-				t.Listeners[i].Config.(*handlers.DNS).Config.Frequency = Config.(handlers.DNSConfig).Frequency
+				applyDNSConfig(&t.Listeners[i].Config.(*handlers.DNS).Config, Config.(handlers.DNSConfig), nil)
 			}
 
 		}
@@ -259,6 +256,100 @@ func (t *Teamserver) ListenerEdit(Type int, Config any) {
 
 	}
 
+}
+
+// ListenerEditDNS applies the DNS listener settings that a client sent and
+// returns the effective configuration of the listener.
+//
+// Only the settings that the client actually sent are overwritten, so a
+// client that does not know a setting does not reset it.
+func (t *Teamserver) ListenerEditDNS(info map[string]any) *handlers.DNSConfig {
+	incoming := dnsConfigFromMap(info)
+
+	for i := range t.Listeners {
+
+		if t.Listeners[i].Type != handlers.LISTENER_DNS {
+			continue
+		}
+
+		if t.Listeners[i].Name != incoming.Name {
+			continue
+		}
+
+		current := &t.Listeners[i].Config.(*handlers.DNS).Config
+		applyDNSConfig(current, incoming, info)
+
+		return current
+	}
+
+	return &incoming
+}
+
+// applyDNSConfig copies an incoming DNS listener configuration into the
+// configuration of the running listener.
+//
+// The info map holds the raw values that the client sent. When a key is
+// present, the value is applied even when it is empty, which allows the
+// operator to clear a setting.
+func applyDNSConfig(current *handlers.DNSConfig, incoming handlers.DNSConfig, info map[string]any) {
+	present := func(key string) bool {
+		if info == nil {
+			return false
+		}
+
+		_, ok := info[key]
+
+		return ok
+	}
+
+	if incoming.Domain != "" {
+		current.Domain = incoming.Domain
+	}
+	if incoming.RecordType != "" {
+		current.RecordType = incoming.RecordType
+	}
+	if incoming.Encoding != "" {
+		current.Encoding = incoming.Encoding
+	}
+	if incoming.Frequency > 0 {
+		current.Frequency = incoming.Frequency
+	}
+	if incoming.BindHost != "" {
+		current.BindHost = incoming.BindHost
+		current.HostBind = incoming.HostBind
+	}
+	if incoming.BindPort > 0 {
+		current.BindPort = incoming.BindPort
+		current.PortBind = incoming.PortBind
+	}
+
+	if incoming.PktSize > 0 || present("PktSize") {
+		current.PktSize = incoming.PktSize
+	}
+	if incoming.TTL > 0 || present("TTL") {
+		current.TTL = incoming.TTL
+	}
+
+	// An empty key keeps the key of the listener, otherwise the agent and
+	// the teamserver would use different keys.
+	if incoming.EncryptKey != "" {
+		current.EncryptKey = incoming.EncryptKey
+	}
+	if incoming.BurstEnabled || present("BurstEnabled") {
+		current.BurstEnabled = incoming.BurstEnabled
+	}
+	if incoming.BurstSleep > 0 || present("BurstSleep") {
+		current.BurstSleep = incoming.BurstSleep
+	}
+	if incoming.BurstJitter > 0 || present("BurstJitter") {
+		current.BurstJitter = incoming.BurstJitter
+	}
+	if incoming.Resolvers != "" || present("Resolvers") {
+		current.Resolvers = incoming.Resolvers
+	}
+	if incoming.DohResolvers != "" || present("DohResolvers") {
+		current.DohResolvers = incoming.DohResolvers
+	}
 }
 
 // ListenerAdd

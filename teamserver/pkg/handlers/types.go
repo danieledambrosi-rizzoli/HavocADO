@@ -6,7 +6,6 @@ import (
 	"Havoc/pkg/agent"
 
 	"github.com/gin-gonic/gin"
-	"github.com/miekg/dns"
 )
 
 type (
@@ -57,18 +56,6 @@ type (
 		KillDate     int64
 		WorkingHours string
 	}
-
-	DNSConfig struct {
-		Name         string
-		Domain       string
-		BindHost     string
-		BindPort     int
-		KillDate     int64
-		WorkingHours string
-		RecordType   string
-		Encoding     string
-		Frequency    int
-	}
 )
 
 type (
@@ -102,13 +89,9 @@ type (
 	}
 
 	DNS struct {
-		Config DNSConfig
+		*TransportDNS
 
 		Teamserver agent.TeamServer
-		Server     *dns.Server
-		TCPServer  *dns.Server
-		State      *dnsState
-		Active     bool
 	}
 
 	External struct {

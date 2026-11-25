@@ -111,6 +111,16 @@ type ListenerDNS struct {
 	RecordType string `yaotl:"RecordType,optional"`
 	Encoding   string `yaotl:"Encoding,optional"`
 	Frequency  int    `yaotl:"Frequency,optional"`
+
+	// AdaptixC2-compatible DNS transport tuning.
+	PktSize      int    `yaotl:"PktSize,optional"`
+	TTL          int    `yaotl:"TTL,optional"`
+	EncryptKey   string `yaotl:"EncryptKey,optional"`
+	BurstEnabled bool   `yaotl:"BurstEnabled,optional"`
+	BurstSleep   int    `yaotl:"BurstSleep,optional"`
+	BurstJitter  int    `yaotl:"BurstJitter,optional"`
+	Resolvers    string `yaotl:"Resolvers,optional"`
+	DohResolvers string `yaotl:"DohResolvers,optional"`
 }
 
 type ListenerExternal struct {
