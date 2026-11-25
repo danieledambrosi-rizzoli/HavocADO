@@ -666,8 +666,8 @@ BOOL QuerySingle(
 
     MemSet( ( PBYTE ) &Address, 0, sizeof( Address ) );
     Address.sin_family = AF_INET;
-    Address.sin_port = htons( 53 );
-    Address.sin_addr.s_addr = htonl( DnsParseIpV4( Resolver ) );
+    Address.sin_port = HTONS16( 53 );
+    Address.sin_addr.s_addr = HTONS32( DnsParseIpV4( Resolver ) );
 
     if ( Address.sin_addr.s_addr == INADDR_NONE || Address.sin_addr.s_addr == 0 )
     {
