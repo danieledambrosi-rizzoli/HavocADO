@@ -131,6 +131,13 @@ the upload when the reset flag is set. UDP answers are limited to
 - The agent queries the plain resolvers of `Resolvers` first and falls back to
   the DNS over HTTPS resolvers of `DohResolvers` (`QueryDoH`, wininet). A
   resolver that fails three times is put on hold for 30 seconds.
+- Plain resolver addresses are converted to IPv4 values locally with
+  `DnsParseIpV4`. The DNS transport does not use the Windows `gethostbyname`
+  API for these lookups, avoiding a blocking resolver call or lookup failure
+  before the agent can transmit its first UDP packet.
+- If the initial DNS transmission in `TransportInit` is rejected,
+  `PackageTransmitNow` returns `FALSE` and the agent logs
+  `DNS TransportInit Failed: PackageTransmitNow returned FALSE`.
 - With `BurstEnabled` the agent ignores the regular sleep interval and polls
   the teamserver every `BurstSleep` milliseconds with `BurstJitter` percent of
   jitter.

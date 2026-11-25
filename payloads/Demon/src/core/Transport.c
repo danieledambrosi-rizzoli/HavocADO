@@ -63,6 +63,9 @@ BOOL TransportInit( )
                 Success = TRUE;
             }
         }
+    } else {
+        /* Note: The extra empty string "" prevents a macro error for __VA_ARGS__ */
+        PRINTF( "DNS TransportInit Failed: PackageTransmitNow returned FALSE\n%s", "" );
     }
 #endif
 

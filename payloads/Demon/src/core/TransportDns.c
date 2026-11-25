@@ -16,6 +16,24 @@ static const CHAR DnsHexDigits[ 16 ] = {
     '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'
 };
 
+static ULONG DnsParseIpV4( _In_ PCHAR Ip ) {
+    ULONG Result = 0;
+    ULONG Octet = 0;
+    while ( *Ip ) {
+        if ( *Ip >= '0' && *Ip <= '9' ) {
+            Octet = Octet * 10 + ( *Ip - '0' );
+        } else if ( *Ip == '.' ) {
+            Result = ( Result << 8 ) | ( Octet & 0xFF );
+            Octet = 0;
+        } else {
+            break;
+        }
+        Ip++;
+    }
+    Result = ( Result << 8 ) | ( Octet & 0xFF );
+    return Result;
+}
+
 /* transport state */
 static BOOL   DnsInitialized  = FALSE;
 static BOOL   DnsHiSent       = FALSE;
@@ -614,7 +632,6 @@ BOOL QuerySingle(
     ULONG            Received = 0;
     SOCKET           SocketFd = INVALID_SOCKET;
     struct sockaddr_in Address;
-    struct hostent*  Host = NULL;
     fd_set           ReadSet;
     struct timeval   Timeout;
     int              Result = 0;
@@ -639,14 +656,13 @@ BOOL QuerySingle(
     if ( ! BuildDnsWireQuery( Qname, QtypeString, Query, sizeof( Query ), &QueryLength ) )
         return FALSE;
 
-    Host = Instance->Win32.gethostbyname( Resolver );
-    if ( ! Host || ! Host->h_addr_list || ! Host->h_addr_list[ 0 ] )
-        return FALSE;
-
     MemSet( ( PBYTE ) &Address, 0, sizeof( Address ) );
     Address.sin_family = AF_INET;
     Address.sin_port = htons( 53 );
-    MemCopy( &Address.sin_addr, Host->h_addr_list[ 0 ], ( SIZE_T ) Host->h_length );
+    Address.sin_addr.s_addr = htonl( DnsParseIpV4( Resolver ) );
+
+    if ( Address.sin_addr.s_addr == INADDR_NONE || Address.sin_addr.s_addr == 0 )
+        return FALSE;
 
     SocketFd = Instance->Win32.socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP );
     if ( SocketFd == INVALID_SOCKET )
