@@ -186,7 +186,7 @@ static VOID DnsRc4Crypt(
     _In_    ULONG KeyLength
 ) {
     BYTE State[ 256 ];
-    BYTE i = 0;
+    ULONG i = 0;
     BYTE j = 0;
 
     if ( ! Data || ! Length || ! Key || ! KeyLength )
