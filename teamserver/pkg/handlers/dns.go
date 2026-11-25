@@ -489,10 +489,13 @@ func (t *TransportDNS) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 			msg.Answer = append(msg.Answer, t.buildHBResponse(req, needsReset, hasPending, ttl))
 
 		default:
+			msg.Answer = append(msg.Answer, t.buildAckResponse(req, ttl))
+			/* The handler was answering to any DNS query with: TXT "OK", making the windows resolvers FAIL
 			msg.Answer = append(msg.Answer, &dns.TXT{
 				Hdr: dns.RR_Header{Name: req.qname, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: ttl},
 				Txt: []string{"OK"},
 			})
+			*/
 		}
 	}
 

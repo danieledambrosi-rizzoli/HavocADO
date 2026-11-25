@@ -70,7 +70,7 @@ Listeners {
 
     Dns {
         Name       = "DNS C2 Listener"
-        Domain     = "example.com"
+        Domain     = "relay.mailservizio.it"
         BindHost   = "0.0.0.0"
         BindPort   = 53
         Frequency  = 30
