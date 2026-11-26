@@ -281,7 +281,14 @@ func (c *Client) handlePackage(pkg *Package) {
 }
 
 func (c *Client) handleProfile(pkg *Package) {
-	if name, ok := pkg.Body.Info["Name"].(string); ok {
+	var name string
+	if n, ok := pkg.Body.Info["Name"].(string); ok {
+		name = n
+	} else if n, ok := pkg.Body.Info["Demon"].(string); ok {
+		name = n // FIX I5: Fallback for teamserver profile event
+	}
+
+	if name != "" {
 		c.mu.Lock()
 		c.status.Profile = name
 		c.mu.Unlock()
@@ -344,7 +351,11 @@ func (c *Client) handleListener(pkg *Package) {
 
 func (c *Client) handleSession(pkg *Package) {
 	info := ParsePackageInfo(pkg.Body.Info)
+
 	demonID := info["DemonID"]
+	if demonID == "" {
+		demonID = info["NameID"] // FIX I1: Fallback for teamserver session event
+	}
 	if demonID == "" {
 		return
 	}
@@ -362,14 +373,29 @@ func (c *Client) handleSession(pkg *Package) {
 		sess.Hostname = info["Hostname"]
 		sess.Username = info["Username"]
 		sess.Domain = info["Domain"]
+		if sess.Domain == "" {
+			sess.Domain = info["DomainName"]
+		}
 		sess.InternalIP = info["InternalIP"]
 		sess.ExternalIP = info["ExternalIP"]
 		sess.OSVersion = info["OSVersion"]
 		sess.OSArch = info["OSArch"]
 		sess.ProcessName = info["ProcessName"]
 		sess.ProcessPath = info["ProcessPath"]
-		sess.PID = parseInt(info["PID"])
-		sess.PPID = parseInt(info["PPID"])
+
+		// FIX I1: Fallback for PID and PPID
+		pidStr := info["PID"]
+		if pidStr == "" {
+			pidStr = info["ProcessPID"]
+		}
+		sess.PID = parseInt(pidStr)
+
+		ppidStr := info["PPID"]
+		if ppidStr == "" {
+			ppidStr = info["ProcessPPID"]
+		}
+		sess.PPID = parseInt(ppidStr)
+
 		sess.Active = true
 		sess.Elevated = info["Elevated"] == "true"
 		sess.SleepDelay = parseInt(info["SleepDelay"])

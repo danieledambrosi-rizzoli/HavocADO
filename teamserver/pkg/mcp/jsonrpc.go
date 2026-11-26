@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"Havoc/pkg/handlers"
+	// "Havoc/pkg/handlers"
 	"Havoc/pkg/operator"
 )
 
@@ -2208,32 +2208,45 @@ func (s *Server) handleStartListener(ctx context.Context, args json.RawMessage) 
 		return nil, err
 	}
 
-	if params.Name == "" {
-		return nil, fmt.Errorf("name is required")
+	// FIX I3: Normalize protocol to match dispatch.go expectations (e.g., "Http", "Https")
+	protoLower := strings.ToLower(params.Protocol)
+	normProtocol := protoLower
+	if protoLower == "http" {
+		normProtocol = "Http"
+	} else if protoLower == "https" {
+		normProtocol = "Https"
+	} else if protoLower == "smb" {
+		normProtocol = "Smb"
+	} else if protoLower == "external" {
+		normProtocol = "External"
+	}
+	params.Config["Protocol"] = normProtocol
+
+	// FIX I3: Provide safe defaults for HTTP/HTTPS to prevent panics in dispatch.go
+	if normProtocol == "Http" || normProtocol == "Https" {
+		setDefault := func(key string, val string) {
+			if _, ok := params.Config[key]; !ok {
+				params.Config[key] = val
+			}
+		}
+		setDefault("HostBind", "0.0.0.0")
+		setDefault("Hosts", "127.0.0.1")
+		setDefault("Headers", "")
+		setDefault("Uris", "/")
+		setDefault("HostRotation", "round-robin")
+		setDefault("PortBind", "80")
+		setDefault("PortConn", "80")
+		setDefault("HostHeader", "")
+		setDefault("UserAgent", "Mozilla/5.0")
 	}
 
-	// Map the MCP protocol name to the value the teamserver dispatcher expects.
-	var protocol string
-	switch strings.ToLower(params.Protocol) {
-	case "http":
-		protocol = handlers.AGENT_HTTP
-	case "https":
-		protocol = handlers.AGENT_HTTPS
-	case "smb":
-		protocol = handlers.AGENT_PIVOT_SMB
-	case "external":
-		protocol = handlers.AGENT_EXTERNAL
-	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", params.Protocol)
-	}
-
-	if err := s.opClient.StartListener(params.Name, protocol, stringifyConfig(params.Config)); err != nil {
+	if err := s.opClient.StartListener(params.Name, normProtocol, stringifyConfig(params.Config)); err != nil {
 		return nil, fmt.Errorf("start listener: %w", err)
 	}
 
 	return map[string]any{
 		"name":     params.Name,
-		"protocol": protocol,
+		"protocol": normProtocol,
 		"status":   "started",
 	}, nil
 }
@@ -2245,6 +2258,46 @@ func (s *Server) handleEditListener(ctx context.Context, args json.RawMessage) (
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return nil, err
+	}
+
+	// FIX I2: Ensure Protocol is present. If the client didn't send it,
+	// we default to "Http" to prevent the teamserver from panicking on type assertion.
+	// (A future enhancement could query s.opClient.ListListeners() to infer the true protocol).
+	protocol, hasProtocol := params.Config["Protocol"].(string)
+	if !hasProtocol || protocol == "" {
+		protocol = "Http" // Safe fallback to prevent panic
+	}
+
+	// Normalize protocol
+	protoLower := strings.ToLower(protocol)
+	normProtocol := protoLower
+	if protoLower == "http" {
+		normProtocol = "Http"
+	} else if protoLower == "https" {
+		normProtocol = "Https"
+	} else if protoLower == "smb" {
+		normProtocol = "Smb"
+	} else if protoLower == "external" {
+		normProtocol = "External"
+	}
+	params.Config["Protocol"] = normProtocol
+
+	// FIX I2: Provide safe defaults for HTTP/HTTPS to prevent panics in dispatch.go
+	if normProtocol == "Http" || normProtocol == "Https" {
+		setDefault := func(key string, val string) {
+			if _, ok := params.Config[key]; !ok {
+				params.Config[key] = val
+			}
+		}
+		setDefault("HostBind", "0.0.0.0")
+		setDefault("Hosts", "127.0.0.1")
+		setDefault("Headers", "")
+		setDefault("Uris", "/")
+		setDefault("HostRotation", "round-robin")
+		setDefault("PortBind", "80")
+		setDefault("PortConn", "80")
+		setDefault("HostHeader", "")
+		setDefault("UserAgent", "Mozilla/5.0")
 	}
 
 	if err := s.opClient.EditListener(params.Name, stringifyConfig(params.Config)); err != nil {

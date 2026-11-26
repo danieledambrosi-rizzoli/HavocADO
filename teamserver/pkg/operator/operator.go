@@ -96,12 +96,12 @@ func (c *Client) WaitOutput(ctx context.Context, sessionID string, cursor uint64
 		// Wait a bit before checking again
 		select {
 		case <-ctx.Done():
-			return OutputPage{}
+			return OutputPage{NextCursor: cursor}
 		case <-time.After(100 * time.Millisecond):
 		}
 
 		if time.Now().After(deadline) {
-			return OutputPage{}
+			return OutputPage{NextCursor: cursor}
 		}
 	}
 }
