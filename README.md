@@ -2,6 +2,8 @@
 
 A customized fork of the [Havoc C2 Framework](https://github.com/HavocFramework/Havoc), extended with custom **Model Context Protocol (MCP)** integrations and Demon agent command tooling.
 
+> **Note:** This project was developed for a school project and is unlikely to be actively maintained anytime soon.
+
 ## Overview & Key Changes
 
 This fork focuses on bridging the Havoc server and Demon agents with AI-assisted workflows and custom payload generation:
